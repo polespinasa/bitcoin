@@ -119,6 +119,12 @@ static std::vector<RPCResult> DecodeTxDoc(const std::string& txid_field_doc)
                 {
                     {RPCResult::Type::STR_HEX, "hex", "hex-encoded witness data (if any)"},
                 }},
+                {RPCResult::Type::OBJ, "witScript", /*optional=*/true, "The P2WSH decoded script (only if P2WSH is used)",
+                {
+                    {RPCResult::Type::STR, "asm", "Human readable disassembly of the witness script"},
+                    {RPCResult::Type::STR, "desc", "Descriptor of the witness script"},
+                    {RPCResult::Type::STR, "type", "Type of the witness script"},
+                }},
                 {RPCResult::Type::NUM, "sequence", "The script sequence number"},
             }},
         }},
