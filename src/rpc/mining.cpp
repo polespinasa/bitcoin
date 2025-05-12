@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include "rpc/request.h"
 #include <bitcoin-build-config.h> // IWYU pragma: keep
 
 #include <chain.h>
@@ -160,18 +161,17 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t&
     return true;
 }
 
-static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const std::vector<CScript>& coinbase_outputs_scripts, int nGenerate, uint64_t nMaxTries)
+static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const std::vector<PartedRewardShare>& coinbase_outputs_scripts, int nGenerate, uint64_t nMaxTries)
 {
     UniValue blockHashes(UniValue::VARR);
     while (nGenerate > 0 && !chainman.m_interrupt) {
-        std::unique_ptr<BlockTemplate> block_template(miner.createNewBlock({ .coinbase_output_script = coinbase_outputs_scripts.at(0) }));
+        std::unique_ptr<BlockTemplate> block_template(miner.createNewBlock({ .coinbase_output_script = coinbase_outputs_scripts.at(0).script_pubkey }));
         CHECK_NONFATAL(block_template);
 
         CBlock block = block_template->getBlock();
         const auto numOutputs = coinbase_outputs_scripts.size();
-        CAmount totalReward = block.vtx[0]->vout[0].nValue;
-        CAmount rewardParted = totalReward / numOutputs;
-        CAmount remainder = totalReward % numOutputs;
+        std::size_t split_remaining_reward_nways = 0;
+        CAmount remaining_reward = block.vtx[0]->vout[0].nValue;
 
         CMutableTransaction mutable_coinbase(*block.vtx.at(0));
 
@@ -183,12 +183,56 @@ static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const
             has_witness_commitment = true;
         }
 
-        mutable_coinbase.vout.clear();
-        for (size_t i = 0; i < numOutputs; ++i) {
-            CAmount outReward = (i < static_cast<size_t>(remainder) ? rewardParted + 1 : rewardParted);
-            CTxOut newTxOut(outReward, coinbase_outputs_scripts[i]);
-            mutable_coinbase.vout.push_back(newTxOut);
+        // Find out what remaining_reward we are left with after each output
+        // and the number by which to divide the remaining reward.
+        for (std::size_t i = 0; i < numOutputs; ++i) {
+
+            const auto [wants_remaining, exact_amount, script_pubkey] = coinbase_outputs_scripts[i];
+
+            if (exact_amount > 0) {
+                if (remaining_reward - exact_amount < 0) {
+                    throw JSONRPCError(RPC_INVALID_VALUE, strprintf("Error: block reward unable to satisfy coinbase outputs. Exceeded at index %lu", i));
+                }
+                remaining_reward -= exact_amount;
+            }
+
+            if (wants_remaining)
+                split_remaining_reward_nways += 1;
         }
+
+        mutable_coinbase.vout.clear();
+        mutable_coinbase.vout.resize(numOutputs);
+
+        if (remaining_reward > 0 && split_remaining_reward_nways > 0) {
+            // Calculate equalSplit and the equalSplit remainder
+            const CAmount equal_split = remaining_reward / split_remaining_reward_nways;
+            CAmount equal_split_remainder = remaining_reward % split_remaining_reward_nways;
+
+            // Assign each output script its correct amount
+            for (std::size_t i = 0; i < numOutputs; ++i) {
+                const auto [wants_remaining, exact_amount, script_pubkey] = coinbase_outputs_scripts[i];
+
+                mutable_coinbase.vout[i].scriptPubKey = script_pubkey;
+
+                if (wants_remaining) {
+                    mutable_coinbase.vout[i].nValue = exact_amount + equal_split;
+                    remaining_reward -= equal_split;
+
+                    if (equal_split_remainder > 0) {
+                        mutable_coinbase.vout[i].nValue += 1;
+                        equal_split_remainder -= 1;
+                        remaining_reward -= 1;
+                    }
+                } else {
+                    mutable_coinbase.vout[i].nValue = exact_amount;
+                }
+            }
+        } else if (remaining_reward > 0) {
+            throw JSONRPCError(RPC_INVALID_VALUE, strprintf("Error: some block reward is left un-allocated."));
+        }
+
+        // Make sure we have done the math right.
+        Assert(remaining_reward == 0);
 
         if (has_witness_commitment) {
             mutable_coinbase.vout.push_back(witness_output);
@@ -278,7 +322,8 @@ static RPCHelpMan generatetodescriptor()
     Mining& miner = EnsureMining(node);
     ChainstateManager& chainman = EnsureChainman(node);
 
-    return generateBlocks(chainman, miner, std::vector<CScript>{coinbase_output_script}, num_blocks, max_tries);
+    const PartedRewardShare reward_share { .script_pubkey = coinbase_output_script };
+    return generateBlocks(chainman, miner, {reward_share}, num_blocks, max_tries);
 },
     };
 }
@@ -326,7 +371,8 @@ static RPCHelpMan generatetoaddress()
 
     CScript coinbase_output_script = GetScriptForDestination(destination);
 
-    return generateBlocks(chainman, miner, std::vector<CScript>{coinbase_output_script}, num_blocks, max_tries);
+    const PartedRewardShare reward_share { .script_pubkey = coinbase_output_script };
+    return generateBlocks(chainman, miner, {reward_share}, num_blocks, max_tries);
 },
     };
 }
@@ -337,11 +383,17 @@ static RPCHelpMan generatetomany()
         "Mine to a specified group of addresses and return the block hashes.",
          {
              {"nblocks", RPCArg::Type::NUM, RPCArg::Optional::NO, "How many blocks are generated."},
-             {"addresses", RPCArg::Type::ARR, RPCArg::Optional::NO, "The addresses to split, in equal parts, the coinbase reward among.",
+             {"addresses", RPCArg::Type::OBJ, RPCArg::Optional::NO, "The addresses to split, in equal parts, the coinbase reward among.",
                 {
-                    {"address", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "A valid address"},
+                   {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "One of the addresses to split the reward with."},
+                   {"split", RPCArg::Type::ARR, RPCArg::Optional::NO, "A tuple specifying the amount and whether the address should receive an equal split of the remaining block reward.",
+                      {
+                        {"amt", RPCArg::Type::NUM, RPCArg::Optional::NO, "The fixed amount for this address."},
+                        {"remainder", RPCArg::Type::BOOL, RPCArg::Optional::NO, "Whether this address should receive an equal split of the remaining block reward."}
+                      }
+                   },
                 },
-            },
+             },
              {"maxtries", RPCArg::Type::NUM, RPCArg::Default{DEFAULT_MAX_TRIES}, "How many iterations to try."},
          },
          RPCResult{
@@ -351,7 +403,7 @@ static RPCHelpMan generatetomany()
              }},
         RPCExamples{
             "\nGenerate 11 blocks to two different addresses:\n"
-            + HelpExampleCli("generatetomany", "\"11 '[\\\"bcrt1qal6p633hvwz2yp5mav0qy7u2az8gkn2xywnj6v\\\", \\\"bcrt1qvr3qgyhw6y0e0zj97v0j5yc40xtpea4wqj0g43\\\"]'\"")
+            + HelpExampleCli("generatetomany", "\"11 '{\\\"bcrt1qal6p633hvwz2yp5mav0qy7u2az8gkn2xywnj6v\\\": [100000000, 1], \\\"bcrt1qvr3qgyhw6y0e0zj97v0j5yc40xtpea4wqj0g43\\\": [150000000, 0], \\\"bcrt1qwfklgtxzm43y2uc0h4yaz9u00td4qpmwme9azl\\\": [0, 1]}'\"")
             + "If you are using the " CLIENT_NAME " wallet, you can get a new address to send the newly generated bitcoin to with:\n"
             + HelpExampleCli("getnewaddress", "")
         },
@@ -360,17 +412,28 @@ static RPCHelpMan generatetomany()
     const int num_blocks{request.params[0].getInt<int>()};
     const uint64_t max_tries{request.params[2].isNull() ? DEFAULT_MAX_TRIES : request.params[2].getInt<int>()};
 
-    const UniValue& addresses = request.params[1].get_array();
-    if (addresses.empty()) {
+    std::map<std::string, UniValue> addresses_to_amounts;
+    request.params[1].getObjMap(addresses_to_amounts);
+    if (addresses_to_amounts.empty()) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: at least one address must be provided.");
     }
-    std::vector<CScript> coinbase_outputs_scripts;
-    for (unsigned int i = 0; i < addresses.size(); ++i) {
-        CTxDestination dest = DecodeDestination(addresses[i].get_str());
+
+    std::vector<PartedRewardShare> coinbase_outputs_scripts;
+    coinbase_outputs_scripts.reserve(addresses_to_amounts.size());
+    std::size_t i = 0;
+    for (const auto& address_to_amount : addresses_to_amounts) {
+        CTxDestination dest = DecodeDestination(address_to_amount.first);
         if (!IsValidDestination(dest)) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Invalid address at index %d", i));
         }
-        coinbase_outputs_scripts.push_back(GetScriptForDestination(dest));
+
+        const auto& split = address_to_amount.second.get_array();
+
+        const CAmount exact_amount = split[0].getInt<CAmount>();
+        const bool wants_remainder = split[1].get_bool();
+
+        coinbase_outputs_scripts.emplace_back(wants_remainder, exact_amount, GetScriptForDestination(dest));
+        ++i;
     }
 
     NodeContext& node = EnsureAnyNodeContext(request.context);
