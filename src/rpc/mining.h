@@ -5,7 +5,16 @@
 #ifndef BITCOIN_RPC_MINING_H
 #define BITCOIN_RPC_MINING_H
 
+#include <script/script.h>
+#include <consensus/amount.h>
+
 /** Default max iterations to try in RPC generatetodescriptor, generatetoaddress, and generateblock. */
 static const uint64_t DEFAULT_MAX_TRIES{1000000};
+
+struct PartedRewardShare {
+    bool wants_remaining = true;
+    CAmount exact_amount = CAmount {0};
+    CScript script_pubkey;
+};
 
 #endif // BITCOIN_RPC_MINING_H
