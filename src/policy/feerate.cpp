@@ -11,35 +11,40 @@
 
 CFeeRate::CFeeRate(const CAmount& nFeePaid, uint32_t num_bytes)
 {
-    const int64_t nSize{num_bytes};
+    assert(num_bytes <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
+    const int32_t nSize = static_cast<int32_t>(num_bytes);
 
     if (nSize > 0) {
-        nSatoshisPerK = nFeePaid * 1000 / nSize;
+        nSatoshisPerV = FeePerVSize(nFeePaid, nSize);
     } else {
-        nSatoshisPerK = 0;
+        nSatoshisPerV = FeePerVSize();
     }
 }
 
 CAmount CFeeRate::GetFee(uint32_t num_bytes) const
 {
-    const int64_t nSize{num_bytes};
+    assert(num_bytes <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
+    const int32_t nSize = static_cast<int32_t>(num_bytes);
 
-    // Be explicit that we're converting from a double to int64_t (CAmount) here.
-    // We've previously had issues with the silent double->int64_t conversion.
-    CAmount nFee{static_cast<CAmount>(std::ceil(nSatoshisPerK * nSize / 1000.0))};
-
-    if (nFee == 0 && nSize != 0) {
-        if (nSatoshisPerK > 0) nFee = CAmount(1);
-        if (nSatoshisPerK < 0) nFee = CAmount(-1);
+    if (nSatoshisPerV.IsEmpty()) { return CAmount(0);}
+    if (nSize < 0 || nSatoshisPerV.size <= 0) { return CAmount(-1);}
+    CAmount nFee = CAmount(nSatoshisPerV.EvaluateFeeUp(nSize));
+    if (nFee == 0 && nSize != 0) { 
+        if (nSatoshisPerV.EvaluateFeeUp(nSatoshisPerV.size) > 0) return CAmount(1);
+        if (nSatoshisPerV.EvaluateFeeUp(nSatoshisPerV.size) < 0) return CAmount(-1);
     }
-
     return nFee;
 }
 
 std::string CFeeRate::ToString(const FeeEstimateMode& fee_estimate_mode) const
 {
+    const CAmount rate_per_kvb = nSatoshisPerV.fee * 1000 / nSatoshisPerV.size;
+
     switch (fee_estimate_mode) {
-    case FeeEstimateMode::SAT_VB: return strprintf("%d.%03d %s/vB", nSatoshisPerK / 1000, nSatoshisPerK % 1000, CURRENCY_ATOM);
-    default:                      return strprintf("%d.%08d %s/kvB", nSatoshisPerK / COIN, nSatoshisPerK % COIN, CURRENCY_UNIT);
+    case FeeEstimateMode::SAT_VB:
+        return strprintf("%d.%03d %s/vB", rate_per_kvb / 1000, rate_per_kvb % 1000, CURRENCY_ATOM);
+    default:
+        return strprintf("%d.%08d %s/kvB", rate_per_kvb / COIN, rate_per_kvb % COIN, CURRENCY_UNIT);
     }
 }
+
