@@ -290,6 +290,9 @@ class RPCPackagesTest(BitcoinTestFramework):
         assert testres_replaceable["allowed"]
         assert_equal(testres_replaceable["vsize"], replaceable_tx["tx"].get_vsize())
         assert_equal(testres_replaceable["fees"]["base"], fee)
+        self.log.info("Fee: " + str(fee))
+        self.log.info("Vsize: " + str(replaceable_tx["tx"].get_vsize()))
+        self.log.info("effective-feerate: " + str(testres_replaceable["fees"]["effective-feerate"]))
         assert_fee_amount(fee, replaceable_tx["tx"].get_vsize(), testres_replaceable["fees"]["effective-feerate"])
         assert_equal(testres_replaceable["fees"]["effective-includes"], [replaceable_tx["wtxid"]])
 
