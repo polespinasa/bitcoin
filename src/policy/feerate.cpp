@@ -9,27 +9,21 @@
 
 #include <cmath>
 
-CFeeRate::CFeeRate(const CAmount& nFeePaid, uint32_t num_bytes)
+CFeeRate::CFeeRate(const CAmount& nFeePaid, int32_t num_bytes)
 {
-    assert(num_bytes <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
-    const int32_t nSize = static_cast<int32_t>(num_bytes);
-
-    if (nSize > 0) {
-        nSatoshisPerV = FeePerVSize(nFeePaid, nSize);
+    if (num_bytes > 0) {
+        nSatoshisPerV = FeePerVSize(nFeePaid, num_bytes);
     } else {
         nSatoshisPerV = FeePerVSize();
     }
 }
 
-CAmount CFeeRate::GetFee(uint32_t num_bytes) const
+CAmount CFeeRate::GetFee(int32_t num_bytes) const
 {
-    assert(num_bytes <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
-    const int32_t nSize = static_cast<int32_t>(num_bytes);
-
     if (nSatoshisPerV.IsEmpty()) { return CAmount(0);}
-    if (nSize < 0 || nSatoshisPerV.size <= 0) { return CAmount(-1);}
-    CAmount nFee = CAmount(nSatoshisPerV.EvaluateFeeUp(nSize));
-    if (nFee == 0 && nSize != 0) {
+    if (num_bytes < 0 || nSatoshisPerV.size <= 0) { return CAmount(-1);}
+    CAmount nFee = CAmount(nSatoshisPerV.EvaluateFeeUp(num_bytes));
+    if (nFee == 0 && num_bytes != 0) {
         if (nSatoshisPerV.EvaluateFeeUp(nSatoshisPerV.size) > 0) return CAmount(1);
         if (nSatoshisPerV.EvaluateFeeUp(nSatoshisPerV.size) < 0) return CAmount(-1);
     }
