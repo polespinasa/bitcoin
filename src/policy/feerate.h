@@ -82,7 +82,22 @@ public:
     friend CFeeRate operator*(const CFeeRate& f, int a) { return CFeeRate(a * f.nSatoshisPerV.fee, f.nSatoshisPerV.size); }
     friend CFeeRate operator*(int a, const CFeeRate& f) { return CFeeRate(a * f.nSatoshisPerV.fee, f.nSatoshisPerV.size); }
 
-    SERIALIZE_METHODS(CFeeRate, obj) { READWRITE(obj.nSatoshisPerV); }
+    SERIALIZE_METHODS(CFeeRate, obj) {
+        READWRITE(obj.nSatoshisPerV.fee, obj.nSatoshisPerV.size);
+        /*
+        CAmount nSatoshisPerK;
+        if (ser_action.ForRead()) {
+            // We're reading from disk/network into the object
+            READWRITE(nSatoshisPerK);
+            obj.nSatoshisPerV = FeePerVSize{nSatoshisPerK, 1000};
+        } else {
+            // We're writing the object to disk/network
+            CAmount nSatoshisPerK = obj.nSatoshisPerV.fee;  // Convert FeeFrac -> scalar
+            READWRITE(nSatoshisPerK);
+        }
+        */
+    }
+
 };
 
 #endif // BITCOIN_POLICY_FEERATE_H
