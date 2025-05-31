@@ -29,7 +29,7 @@ enum class FeeEstimateMode {
 
 /**
  * Fee rate in satoshis per virtualbyte: CAmount / vB
- * Wrapping FeeFrac to handle
+ * Wrapping FeeFrac to handle precision issues
  */
 class CFeeRate
 {
@@ -65,16 +65,16 @@ public:
     friend bool operator<(const CFeeRate& a, const CFeeRate& b) { return a.nSatoshisPerV << b.nSatoshisPerV; }
     friend bool operator>(const CFeeRate& a, const CFeeRate& b) { return a.nSatoshisPerV >> b.nSatoshisPerV; }
     friend bool operator==(const CFeeRate& a, const CFeeRate& b) { return FeeRateCompare(a.nSatoshisPerV, b.nSatoshisPerV) == std::weak_ordering::equivalent; }
-    friend bool operator<=(const CFeeRate& a, const CFeeRate& b) { 
+    friend bool operator<=(const CFeeRate& a, const CFeeRate& b) {
         const auto compare = FeeRateCompare(a.nSatoshisPerV, b.nSatoshisPerV);
         return compare == std::weak_ordering::equivalent || compare == std::weak_ordering::less;
     }
-    friend bool operator>=(const CFeeRate& a, const CFeeRate& b) { 
+    friend bool operator>=(const CFeeRate& a, const CFeeRate& b) {
         const auto compare = FeeRateCompare(a.nSatoshisPerV, b.nSatoshisPerV);
         return compare == std::weak_ordering::equivalent || compare == std::weak_ordering::greater;
     }
     friend bool operator!=(const CFeeRate& a, const CFeeRate& b) { return FeeRateCompare(a.nSatoshisPerV, b.nSatoshisPerV) != std::weak_ordering::equivalent; }
-    CFeeRate& operator+=(const CFeeRate& a) { 
+    CFeeRate& operator+=(const CFeeRate& a) {
         nSatoshisPerV = FeePerVSize(GetFeePerK() + a.GetFeePerK(), 1000);
         return *this;
     }

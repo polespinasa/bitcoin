@@ -29,7 +29,7 @@ CAmount CFeeRate::GetFee(uint32_t num_bytes) const
     if (nSatoshisPerV.IsEmpty()) { return CAmount(0);}
     if (nSize < 0 || nSatoshisPerV.size <= 0) { return CAmount(-1);}
     CAmount nFee = CAmount(nSatoshisPerV.EvaluateFeeUp(nSize));
-    if (nFee == 0 && nSize != 0) { 
+    if (nFee == 0 && nSize != 0) {
         if (nSatoshisPerV.EvaluateFeeUp(nSatoshisPerV.size) > 0) return CAmount(1);
         if (nSatoshisPerV.EvaluateFeeUp(nSatoshisPerV.size) < 0) return CAmount(-1);
     }
