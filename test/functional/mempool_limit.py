@@ -385,6 +385,9 @@ class MempoolLimitTest(BitcoinTestFramework):
         assert_equal(rich_parent_result["fees"]["base"], 0)
         assert_equal(child_result["fees"]["base"], DEFAULT_FEE)
         # The "rich" parent does not require CPFP so its effective feerate is just its individual feerate.
+        self.log.info("Default fee is: " + str(DEFAULT_FEE))
+        self.log.info("Vsize is: " + str(tx_rich["tx"].get_vsize()))
+        self.log.info("Efective feerate is: " + str(rich_parent_result["fees"]["effective-feerate"]))
         assert_fee_amount(DEFAULT_FEE, tx_rich["tx"].get_vsize(), rich_parent_result["fees"]["effective-feerate"])
         assert_equal(rich_parent_result["fees"]["effective-includes"], [tx_rich["wtxid"]])
         # The "poor" parent and child's effective feerates are the same, composed of their total
