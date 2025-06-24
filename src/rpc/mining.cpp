@@ -306,7 +306,7 @@ static RPCHelpMan generateblock()
     return RPCHelpMan{"generateblock",
         "Mine a set of ordered transactions to a specified address or descriptor and return the block hash.",
         {
-            {"outputs", RPCArg::Type::OBJ, RPCArg::Optional::NO, "The addresses or descriptors to split, in equal parts, the coinbase reward among.\n"
+            {"outputs", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "The addresses or descriptors to split, in equal parts, the coinbase reward among.\n"
                 "If no outputs are provided the coinbase transaction will burn the coins into an OP_RETURN output.\n"
                 "If only one output is desired a simple address or descriptor can be provided without using JSON format",
                 {
@@ -357,18 +357,14 @@ static RPCHelpMan generateblock()
         }
     } else if (!request.params[0].isNull()) {
         aod_to_amount[request.params[0].get_str()] = UniValue(0);
-    } else {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: no outputs provided.");
     }
 
     CScript coinbase_output_script;
     std::string error;
-    std::vector<CScript> coinbase_outputs_scripts;
-    std::vector<CAmount> coinbase_outputs_amounts;
+    std::vector<std::pair<CScript, CAmount>> coinbase_outputs_scripts;
     CAmount total_assigned_reward = 0;
     if (aod_to_amount.empty()) {
-        coinbase_outputs_scripts.push_back(CScript() << OP_RETURN);
-        coinbase_outputs_amounts.push_back(CAmount(0));
+        coinbase_outputs_scripts.emplace_back(CScript() << OP_RETURN, CAmount(0));
     }
     for (const auto& aod : aod_to_amount) {
         const std::string& script_or_descriptor = aod.first;
@@ -382,12 +378,10 @@ static RPCHelpMan generateblock()
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Error: Invalid address or descriptor");
             }
 
-            coinbase_outputs_scripts.push_back(GetScriptForDestination(destination));
+            coinbase_outputs_scripts.emplace_back(GetScriptForDestination(destination), reward_split);
         } else {
-            coinbase_outputs_scripts.push_back(coinbase_output_script);
+            coinbase_outputs_scripts.emplace_back(coinbase_output_script, reward_split);
         }
-
-        coinbase_outputs_amounts.push_back(reward_split);
         total_assigned_reward += reward_split;
     }
 
@@ -429,7 +423,10 @@ static RPCHelpMan generateblock()
     {
         LOCK(chainman.GetMutex());
         {
-            std::unique_ptr<BlockTemplate> block_template{miner.createNewBlock({.use_mempool = mine_mempool, .coinbase_output_script = coinbase_outputs_scripts.at(0)})};
+            std::unique_ptr<BlockTemplate> block_template{miner.createNewBlock({
+                .use_mempool = mine_mempool,
+                .coinbase_output_script = coinbase_outputs_scripts.at(0).first
+            })};
             CHECK_NONFATAL(block_template);
 
             block = block_template->getBlock();
@@ -460,10 +457,11 @@ static RPCHelpMan generateblock()
         }
 
         mutable_coinbase.vout.clear();
-        for (size_t i = 0; i < num_outputs; ++i) {
-            CAmount out_reward = coinbase_outputs_amounts[i]
-                + (i < static_cast<size_t>(remainder) ? unassigned_reward_parted + 1 : unassigned_reward_parted);
-            CTxOut new_tx_out(out_reward, coinbase_outputs_scripts[i]);
+        std::size_t i = 0;
+        for (const auto& coinbase_output_script : coinbase_outputs_scripts) {
+            CAmount out_reward = coinbase_output_script.second
+                + ((i++) < static_cast<size_t>(remainder) ? unassigned_reward_parted + 1 : unassigned_reward_parted);
+            CTxOut new_tx_out(out_reward, coinbase_output_script.first);
             mutable_coinbase.vout.push_back(new_tx_out);
         }
         if (has_witness_commitment) {
