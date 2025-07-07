@@ -5,6 +5,7 @@
 """Test generate* RPCs."""
 
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.wallet import MiniWallet
@@ -49,6 +50,19 @@ class RPCGenerateTest(BitcoinTestFramework):
         block = node.getblock(blockhash=hash, verbose=2)
         assert_equal(len(block['tx']), 1)
         assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
+
+        self.log.info('Generate an empty block to a list of addresses and custom reward split')
+        address2 = miniwallet.get_address()
+        address3 = miniwallet.get_address()
+        hash = self.generateblock(node, outputs=json.dumps([{address: 100000000}, {address2: 0}, {address3: 0}]), transactions=[])['hash']
+        block = node.getblock(blockhash=hash, verbose=2)
+        assert_equal(len(block['tx']), 1)
+        assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
+        assert_equal(block['tx'][0]['vout'][1]['scriptPubKey']['address'], address2)
+        assert_equal(block['tx'][0]['vout'][2]['scriptPubKey']['address'], address3)
+        assert_equal(block['tx'][0]['vout'][0]['value'], Decimal('9.00000000'))
+        assert_equal(block['tx'][0]['vout'][1]['value'], Decimal('8.00000000'))
+        assert_equal(block['tx'][0]['vout'][2]['value'], Decimal('8.00000000'))
 
         self.log.info('Generate an empty block to a list of addresses')
         address2 = miniwallet.get_address()
