@@ -14,6 +14,7 @@
 #include <streams.h>
 #include <txmempool.h>
 #include <validation.h>
+#include <logging/timer.h>
 
 #include <unordered_map>
 
@@ -111,6 +112,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
     std::vector<bool> have_txn_linear(txn_available_linear.size());
     size_t mempool_count_linear = mempool_count;
     {
+    LOG_TIME_MILLIS_WITH_CATEGORY("FINDMEMPOOLTXLINEAR", BCLog::BENCH);
     LOCK(pool->cs);
     for (const auto& entry : pool->mapTx.get<ancestor_score>()) {
         uint64_t shortid = cmpctblock.GetShortID(entry.GetSharedTx()->GetWitnessHash());
@@ -135,6 +137,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
     // Original code with tx randomized
     std::vector<bool> have_txn_randomized(txn_available.size());
     {
+    LOG_TIME_MILLIS_WITH_CATEGORY("FINDMEMPOOLTXRANDOM", BCLog::BENCH);
     LOCK(pool->cs);
     for (const auto& tx : pool->txns_randomized) {
         uint64_t shortid = cmpctblock.GetShortID(tx->GetWitnessHash());
