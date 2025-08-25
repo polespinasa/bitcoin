@@ -103,16 +103,46 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
     if (shorttxids.size() != cmpctblock.shorttxids.size())
         return READ_STATUS_FAILED; // Short ID collision
 
-    std::vector<bool> have_txn(txn_available.size());
+    // Check if we have transactions from cmpblock in our mempool
+    // by looking linear following a high fee rate first strategy
+
+    // Duplicate data needed for benchmarking
+    std::vector<CTransactionRef> txn_available_linear(txn_available);
+    std::vector<bool> have_txn_linear(txn_available_linear.size());
+    size_t mempool_count_linear = mempool_count;
+    {
+    LOCK(pool->cs);
+    for (const auto& entry : pool->mapTx.get<ancestor_score>()) {
+        uint64_t shortid = cmpctblock.GetShortID(entry.GetSharedTx()->GetWitnessHash());
+        std::unordered_map<uint64_t, uint16_t>::iterator idit = shorttxids.find(shortid);
+        if (idit!= shorttxids.end()) {
+            if (!have_txn_linear[idit->second]) {
+                txn_available_linear[idit->second] = entry.GetSharedTx();
+                have_txn_linear[idit->second] = true;
+                mempool_count_linear++;
+            } else {
+                if (txn_available_linear[idit->second]){
+                    txn_available_linear[idit->second].reset();
+                    mempool_count_linear--;
+                }
+            }
+        }
+        if (mempool_count_linear == shorttxids.size()) break;
+    }
+    }
+
+
+    // Original code with tx randomized
+    std::vector<bool> have_txn_randomized(txn_available.size());
     {
     LOCK(pool->cs);
     for (const auto& tx : pool->txns_randomized) {
         uint64_t shortid = cmpctblock.GetShortID(tx->GetWitnessHash());
         std::unordered_map<uint64_t, uint16_t>::iterator idit = shorttxids.find(shortid);
         if (idit != shorttxids.end()) {
-            if (!have_txn[idit->second]) {
+            if (!have_txn_randomized[idit->second]) {
                 txn_available[idit->second] = tx;
-                have_txn[idit->second]  = true;
+                have_txn_randomized[idit->second] = true;
                 mempool_count++;
             } else {
                 // If we find two mempool txn that match the short id, just request it.
@@ -139,9 +169,9 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
         uint64_t shortid = cmpctblock.GetShortID(extra_txn[i]->GetWitnessHash());
         std::unordered_map<uint64_t, uint16_t>::iterator idit = shorttxids.find(shortid);
         if (idit != shorttxids.end()) {
-            if (!have_txn[idit->second]) {
+            if (!have_txn_randomized[idit->second]) {
                 txn_available[idit->second] = extra_txn[i];
-                have_txn[idit->second]  = true;
+                have_txn_randomized[idit->second]  = true;
                 mempool_count++;
                 extra_count++;
             } else {
