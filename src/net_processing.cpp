@@ -4323,6 +4323,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             return;
         }
 
+        const auto time_start{SteadyClock::now()};
         CBlockHeaderAndShortTxIDs cmpctblock;
         vRecv >> cmpctblock;
 
@@ -4522,7 +4523,11 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         if (fProcessBLOCKTXN) {
             BlockTransactions txn;
             txn.blockhash = blockhash;
-            return ProcessCompactBlockTxns(pfrom, *peer, txn);
+            ProcessCompactBlockTxns(pfrom, *peer, txn);
+            const auto elapsed_time = SteadyClock::now() - time_start;
+            LogDebug(BCLog::CMPCTBLOCK, "Optimistic reconstruction succeeded, taking: %.2fms\n",
+                Ticks<MillisecondsDouble>(elapsed_time));
+            return;
         }
 
         if (fRevertToHeaderProcessing) {
@@ -4559,6 +4564,9 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
                 // can't be used to interfere with block relay.
                 RemoveBlockRequest(pblock->GetHash(), std::nullopt);
             }
+            const auto elapsed_time = SteadyClock::now() - time_start;
+            LogDebug(BCLog::CMPCTBLOCK, "Optimistic reconstruction succeeded, taking: %.2fms\n",
+                Ticks<MillisecondsDouble>(elapsed_time));
         }
         return;
     }
