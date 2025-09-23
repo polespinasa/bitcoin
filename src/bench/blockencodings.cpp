@@ -47,42 +47,36 @@ private:
     }
 
 public:
-    BenchCBHAST(InsecureRandomContext& rng, int txs) : CBlockHeaderAndShortTxIDs(DummyBlock(), rng.rand64())
+    BenchCBHAST(FastRandomContext& rng, const std::vector<CTransactionRef> &txs)
+    :  CBlockHeaderAndShortTxIDs(DummyBlock(), rng.rand64())
     {
-        shorttxids.reserve(txs);
-        while (txs-- > 0) {
-            shorttxids.push_back(rng.randbits<SHORTTXIDS_LENGTH*8>());
+        shorttxids.reserve(txs.size());
+        for (const auto &tx : txs) {
+            shorttxids.push_back(GetShortID(tx->GetWitnessHash()));
         }
     }
 };
 } // anon namespace
 
-static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_extra)
-{
-    const auto testing_setup = MakeNoLogFileContext<const ChainTestingSetup>(ChainType::MAIN);
-    CTxMemPool& pool = *Assert(testing_setup->m_node.mempool);
-    InsecureRandomContext rng(11);
-
-    LOCK2(cs_main, pool.cs);
-
-    std::vector<std::pair<Wtxid, CTransactionRef>> extratxn;
-    extratxn.reserve(n_extra);
-
+static std::vector<CTransactionRef> MakeTransactions(size_t count) {
     // bump up the size of txs
     std::array<std::byte,200> sigspam;
     sigspam.fill(std::byte(42));
 
-    // a reasonably large mempool of 50k txs, ~10MB total
+    FastRandomContext rng{/*fDeterministic=*/false};
+
     std::vector<CTransactionRef> refs;
-    refs.reserve(n_pool + n_extra);
-    for (size_t i = 0; i < n_pool + n_extra; ++i) {
+    refs.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
         CMutableTransaction tx = CMutableTransaction();
         tx.vin.resize(1);
         tx.vin[0].scriptSig = CScript() << sigspam;
         tx.vin[0].scriptWitness.stack.push_back({1});
-        tx.vout.resize(1);
+        tx.vout.resize(2);
         tx.vout[0].scriptPubKey = CScript() << OP_1 << OP_EQUAL;
         tx.vout[0].nValue = i;
+        tx.vout[1].scriptPubKey = CScript() << OP_RETURN << rng.randbytes(80);
+        tx.vout[1].nValue = 0;
         refs.push_back(MakeTransactionRef(tx));
     }
 
@@ -90,18 +84,58 @@ static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_
     // to simulate a mempool that has changed over time
     std::shuffle(refs.begin(), refs.end(), rng);
 
-    for (size_t i = 0; i < n_pool; ++i) {
-        AddTx(refs[i], /*fee=*/refs[i]->vout[0].nValue, pool);
+    return refs;
+}
+
+static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_extra, size_t n_random_in_block, size_t n_pool_in_block = 0, size_t n_extra_in_block = 0)
+{
+    assert(n_pool >= n_pool_in_block && n_extra >= n_extra_in_block);
+    const auto testing_setup = MakeNoLogFileContext<const ChainTestingSetup>(ChainType::MAIN);
+    CTxMemPool& pool = *Assert(testing_setup->m_node.mempool);
+    FastRandomContext rng(/*fDeterministic=*/false);
+
+    LOCK2(cs_main, pool.cs);
+
+    auto mempool_refs = MakeTransactions(n_pool);
+    auto extra_refs = MakeTransactions(n_extra);
+    auto random_refs = MakeTransactions(n_random_in_block);
+
+
+
+    std::vector<CTransactionRef> refs_for_block;
+    refs_for_block.reserve(n_pool_in_block + n_extra_in_block);
+    for (size_t i = 0; i < n_pool_in_block; i++) {
+        refs_for_block.push_back(mempool_refs[i]);
     }
-    for (size_t i = n_pool; i < n_pool + n_extra; ++i) {
-        extratxn.emplace_back(refs[i]->GetWitnessHash(), refs[i]);
+    for (size_t i = 0; i < n_extra_in_block; i++) {
+        refs_for_block.push_back(extra_refs[i]);
+    }
+    for (size_t i = 0; i < n_random_in_block; i++) {
+        refs_for_block.push_back(random_refs[i]);
     }
 
-    BenchCBHAST cmpctblock{rng, 3000};
+    // Shuffle the mempool_refs and extra *after* inserting the transactions
+    // into the cmpctblock, so that the top of the mempool is not identical to
+    // the cmpctblock shorttxid's.
+    std::shuffle(mempool_refs.begin(), mempool_refs.end(), rng);
+    for (auto const &tx : mempool_refs) {
+        AddTx(tx, /*fee=*/tx->vout[0].nValue, pool);
+    }
 
-    bench.run([&] {
+    std::shuffle(extra_refs.begin(), extra_refs.end(), rng);
+    // Insert extratxn refs into the extratxn vector
+    std::vector<std::pair<Wtxid, CTransactionRef>> extratxn;
+    extratxn.reserve(n_extra);
+    for(auto const &tx : extra_refs) {
+        extratxn.emplace_back(tx->GetWitnessHash(), tx);
+    }
+
+    std::unique_ptr<BenchCBHAST> cmpctblock;
+    cmpctblock = std::make_unique<BenchCBHAST>(rng, refs_for_block);
+
+    bench.unit("block").run([&] {
         PartiallyDownloadedBlock pdb{&pool};
-        auto res = pdb.InitData(cmpctblock, extratxn);
+        auto res = pdb.InitData(*cmpctblock, extratxn);
 
         // if there were duplicates the benchmark will be invalid
         // (eg, extra txns will be skipped) and we will receive
@@ -110,22 +144,36 @@ static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_
     });
 }
 
+static void BlockEncodingOptimisticReconstruction(benchmark::Bench& bench)
+{
+    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra*/100, /*n_random_in_block=*/0, /*n_pool_in_block=*/7'000, /*n_extra_in_block=*/10);
+}
+
+static void BlockEncodingOptimisticReconstructionNoExtra(benchmark::Bench& bench)
+{
+    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra*/100, /*n_random_in_block=*/0, /*n_pool_in_block=*/7'000, /*n_extra_in_block=*/0);
+}
+
+// These three benchmarks have random shorttxid's, we will never find the txn's in our
+// mempool/extra pool.
 static void BlockEncodingNoExtra(benchmark::Bench& bench)
 {
-    BlockEncodingBench(bench, 50000, 0);
+    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra=*/0, /*n_random_in_block=*/3'000);
 }
 
 static void BlockEncodingStdExtra(benchmark::Bench& bench)
 {
     static_assert(DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN == 100);
-    BlockEncodingBench(bench, 50000, 100);
+    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra=*/100, /*n_random_in_block=*/3'000);
 }
 
 static void BlockEncodingLargeExtra(benchmark::Bench& bench)
 {
-    BlockEncodingBench(bench, 50000, 5000);
+    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra=*/5'000, /*n_random_in_block=*/3'000);
 }
 
+BENCHMARK(BlockEncodingOptimisticReconstruction, benchmark::PriorityLevel::HIGH);
+BENCHMARK(BlockEncodingOptimisticReconstructionNoExtra, benchmark::PriorityLevel::HIGH);
 BENCHMARK(BlockEncodingNoExtra, benchmark::PriorityLevel::HIGH);
 BENCHMARK(BlockEncodingStdExtra, benchmark::PriorityLevel::HIGH);
 BENCHMARK(BlockEncodingLargeExtra, benchmark::PriorityLevel::HIGH);
