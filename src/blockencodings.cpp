@@ -15,6 +15,7 @@
 #include <txmempool.h>
 #include <validation.h>
 
+#include <ranges>
 #include <unordered_map>
 
 CBlockHeaderAndShortTxIDs::CBlockHeaderAndShortTxIDs(const CBlock& block, const uint64_t nonce) :
@@ -146,7 +147,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
     }
 
     LOCK(pool->cs);
-    for (const auto& [wtxid, txit] : pool->txns_randomized) {
+    for (const auto& [wtxid, txit] : pool->txns_randomized | std::views::reverse) {
         uint64_t shortid = cmpctblock.GetShortID(wtxid);
         std::unordered_map<uint64_t, uint16_t>::iterator idit = shorttxids.find(shortid);
         if (idit != shorttxids.end()) {
