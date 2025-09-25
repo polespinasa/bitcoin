@@ -64,6 +64,12 @@ class RPCGenerateTest(BitcoinTestFramework):
         assert_equal(block['tx'][0]['vout'][1]['value'], Decimal('8.00000000'))
         assert_equal(block['tx'][0]['vout'][2]['value'], Decimal('8.00000000'))
 
+        self.log.info('Generate an empty block to a list of addresses with invalid reward split (over the total block reward)')
+        assert_raises_rpc_error(-8, "Total customly assigned reward exceeds block reward.", self.generateblock, node, json.dumps([{address: 2_500_000_000}, {address2: 100_000_000}, {address3: 100_000_000}]), [])
+
+        self.log.info('Generate an empty block to a list of addresses with negative reward split')
+        assert_raises_rpc_error(-8, "Error: Parted reward amount cannot be negative", self.generateblock, node, json.dumps([{address: -1}, {address2: 100_000_000}, {address3: 100_000_000}]), [])
+
         self.log.info('Generate an empty block to a list of addresses')
         address2 = miniwallet.get_address()
         hash = self.generateblock(node, outputs=json.dumps([address, address2]), transactions=[])['hash']
@@ -148,7 +154,7 @@ class RPCGenerateTest(BitcoinTestFramework):
 
         # Ensure that generateblock can be called concurrently by many threads.
         self.log.info('Generate blocks in parallel')
-        generate_50_blocks = lambda n: [n.generateblock(outputs='"'+address+'"', transactions=[]) for _ in range(50)]
+        generate_50_blocks = lambda n: [n.generateblock(outputs=address, transactions=[]) for _ in range(50)]
         rpcs = [node.cli for _ in range(6)]
         with ThreadPoolExecutor(max_workers=len(rpcs)) as threads:
             list(threads.map(generate_50_blocks, rpcs))
