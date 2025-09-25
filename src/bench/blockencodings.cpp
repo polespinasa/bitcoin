@@ -87,7 +87,7 @@ static std::vector<CTransactionRef> MakeTransactions(size_t count) {
     return refs;
 }
 
-static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_extra, size_t n_random_in_block, size_t n_pool_in_block = 0, size_t n_extra_in_block = 0)
+static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_extra, size_t n_random_in_block, size_t n_pool_in_block = 0, size_t n_extra_in_block = 0, bool shuffle = true)
 {
     assert(n_pool >= n_pool_in_block && n_extra >= n_extra_in_block);
     const auto testing_setup = MakeNoLogFileContext<const ChainTestingSetup>(ChainType::MAIN);
@@ -114,15 +114,17 @@ static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_
         refs_for_block.push_back(random_refs[i]);
     }
 
-    // Shuffle the mempool_refs and extra *after* inserting the transactions
+    // If shuffle is set, shuffle the mempool_refs and extra *after* inserting the transactions
     // into the cmpctblock, so that the top of the mempool is not identical to
-    // the cmpctblock shorttxid's.
-    std::shuffle(mempool_refs.begin(), mempool_refs.end(), rng);
+    // the cmpctblock shorttxid's
+    if (shuffle) {
+        std::shuffle(mempool_refs.begin(), mempool_refs.end(), rng);
+        std::shuffle(extra_refs.begin(), extra_refs.end(), rng);
+    }
     for (auto const &tx : mempool_refs) {
         AddTx(tx, /*fee=*/tx->vout[0].nValue, pool);
     }
 
-    std::shuffle(extra_refs.begin(), extra_refs.end(), rng);
     // Insert extratxn refs into the extratxn vector
     std::vector<std::pair<Wtxid, CTransactionRef>> extratxn;
     extratxn.reserve(n_extra);
@@ -146,12 +148,12 @@ static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_
 
 static void BlockEncodingOptimisticReconstruction(benchmark::Bench& bench)
 {
-    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra*/100, /*n_random_in_block=*/0, /*n_pool_in_block=*/7'000, /*n_extra_in_block=*/10);
+    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra*/100, /*n_random_in_block=*/0, /*n_pool_in_block=*/7'000, /*n_extra_in_block=*/10, /*shuffle=*/false);
 }
 
 static void BlockEncodingOptimisticReconstructionNoExtra(benchmark::Bench& bench)
 {
-    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra*/100, /*n_random_in_block=*/0, /*n_pool_in_block=*/7'000, /*n_extra_in_block=*/0);
+    BlockEncodingBench(bench, /*n_pool=*/50'000, /*n_extra*/100, /*n_random_in_block=*/0, /*n_pool_in_block=*/7'000, /*n_extra_in_block=*/0, /*shuffle=*/false);
 }
 
 // These three benchmarks have random shorttxid's, we will never find the txn's in our
