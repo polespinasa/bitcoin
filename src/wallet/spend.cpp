@@ -21,6 +21,7 @@
 #include <util/check.h>
 #include <util/moneystr.h>
 #include <util/rbf.h>
+#include <util/time.h>
 #include <util/trace.h>
 #include <util/translation.h>
 #include <wallet/coincontrol.h>
@@ -791,6 +792,16 @@ util::Result<SelectionResult> ChooseSelectionResult(interfaces::Chain& chain, co
             outpoints.push_back(coin->outpoint);
             summed_bump_fees += coin->ancestor_bump_fees;
         }
+
+        // Debug sleep to allow testing of race conditions between individual and combined
+        // bump fee calculations. Only sleeps when there are unconfirmed inputs.
+        // See functional test wallet_bumpfee_discount_race.py.
+        if (!outpoints.empty()) {
+            if (int64_t sleep_ms = gArgs.GetIntArg("-test_coinselection_bump_fee_sleep", 0); sleep_ms > 0) {
+                UninterruptibleSleep(std::chrono::milliseconds{sleep_ms});
+            }
+        }
+
         std::optional<CAmount> combined_bump_fee = chain.calculateCombinedBumpFee(outpoints, coin_selection_params.m_effective_feerate);
         if (!combined_bump_fee.has_value()) {
             return util::Error{_("Failed to calculate bump fees, because unconfirmed UTXOs depend on an enormous cluster of unconfirmed transactions.")};
