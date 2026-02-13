@@ -77,6 +77,9 @@ endif()
 enable_language(CXX)
 set(MIN_CLANG_VERSION 17.0)
 set(MIN_GCC_VERSION 12.1)
+set(MIN_MSVC_VERSION 19.50)
+  # VS 18.x uses 19.50-19.59 as MSVC version values
+  # https://cmake.org/cmake/help/latest/variable/MSVC_VERSION.html
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS MIN_CLANG_VERSION)
@@ -87,6 +90,12 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS MIN_GCC_VERSION)
     message(FATAL_ERROR "GCC >= ${MIN_GCC_VERSION} required.")
+  endif()
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS MIN_MSVC_VERSION)
+    message(FATAL_ERROR "MSVC >= ${MIN_MSVC_VERSION} required.")
   endif()
 endif()
 
