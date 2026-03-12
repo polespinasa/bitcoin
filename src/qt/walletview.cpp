@@ -8,6 +8,7 @@
 #include <qt/askpassphrasedialog.h>
 #include <qt/clientmodel.h>
 #include <qt/guiutil.h>
+#include <qt/importdescriptorsdialog.h>
 #include <qt/optionsmodel.h>
 #include <qt/overviewpage.h>
 #include <qt/platformstyle.h>
@@ -283,4 +284,12 @@ void WalletView::showProgress(const QString &title, int nProgress)
 void WalletView::disableTransactionView(bool disable)
 {
     transactionView->setDisabled(disable);
+}
+
+void WalletView::importDescriptors()
+{
+    ImportDescriptorsDialog dlg(walletModel, this);
+    // Connect the signal to your RPC dispatch layer here:
+    // connect(&dlg, &ImportDescriptorsDialog::importRequested, this, &WalletView::handleImportDescriptors);
+    dlg.exec();
 }

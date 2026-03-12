@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ImportDescriptorsDialog</class>
+ <widget class="QDialog" name="ImportDescriptorsDialog">
+  <property name="windowTitle">
+   <string>Import Descriptors</string>
+  </property>
+  <property name="minimumSize">
+   <size><width>820</width><height>400</height></size>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="infoLabel">
+     <property name="text">
+      <string>Enter one or more output descriptors to import into this wallet.</string>
+     </property>
+     <property name="wordWrap"><bool>true</bool></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTableWidget" name="tableWidget">
+     <property name="selectionMode">
+      <enum>QAbstractItemView::ExtendedSelection</enum>
+     </property>
+     <property name="selectionBehavior">
+      <enum>QAbstractItemView::SelectRows</enum>
+     </property>
+     <property name="alternatingRowColors"><bool>true</bool></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout">
+     <item>
+      <widget class="QPushButton" name="addButton">
+       <property name="text"><string>&amp;Add</string></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="removeButton">
+       <property name="text"><string>&amp;Remove</string></property>
+      </widget>
+     </item>
+     <item>
+      <spacer>
+       <property name="orientation"><enum>Qt::Horizontal</enum></property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="clearButton">
+       <property name="text"><string>C&amp;lear</string></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel">
+     <property name="text"><string/></property>
+     <property name="wordWrap"><bool>true</bool></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout">
+     <item>
+      <spacer>
+       <property name="orientation"><enum>Qt::Horizontal</enum></property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="importButton">
+       <property name="text"><string>&amp;Import</string></property>
+       <property name="enabled"><bool>false</bool></property>
+       <property name="default"><bool>true</bool></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="cancelButton">
+       <property name="text"><string>Cancel</string></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+</ui>

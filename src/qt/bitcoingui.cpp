@@ -368,6 +368,10 @@ void BitcoinGUI::createActions()
     m_migrate_wallet_action->setStatusTip(tr("Migrate a wallet"));
     m_migrate_wallet_menu = new QMenu(this);
 
+    m_import_descriptor_to_wallet_action = new QAction(tr("Import descritors"), this);
+    m_import_descriptor_to_wallet_action->setEnabled(false);
+    m_import_descriptor_to_wallet_action->setStatusTip(tr("Import descritors to wallet"));
+
     showHelpMessageAction = new QAction(tr("&Command-line options"), this);
     showHelpMessageAction->setMenuRole(QAction::NoRole);
     showHelpMessageAction->setStatusTip(tr("Show the %1 help message to get a list with possible Bitcoin command-line options").arg(CLIENT_NAME));
@@ -396,6 +400,7 @@ void BitcoinGUI::createActions()
         connect(signMessageAction, &QAction::triggered, [this]{ gotoSignMessageTab(); });
         connect(m_load_psbt_action, &QAction::triggered, [this]{ gotoLoadPSBT(); });
         connect(m_load_psbt_clipboard_action, &QAction::triggered, [this]{ gotoLoadPSBT(true); });
+        connect(m_import_descriptor_to_wallet_action, &QAction::triggered, walletFrame, &WalletFrame::importDescriptors);
         connect(verifyMessageAction, &QAction::triggered, [this]{ showNormalIfMinimized(); });
         connect(verifyMessageAction, &QAction::triggered, [this]{ gotoVerifyMessageTab(); });
         connect(usedSendingAddressesAction, &QAction::triggered, walletFrame, &WalletFrame::usedSendingAddresses);
@@ -544,6 +549,7 @@ void BitcoinGUI::createMenuBar()
         file->addAction(m_close_wallet_action);
         file->addAction(m_close_all_wallets_action);
         file->addAction(m_migrate_wallet_action);
+        file->addAction(m_import_descriptor_to_wallet_action);
         file->addSeparator();
         file->addAction(backupWalletAction);
         file->addAction(m_restore_wallet_action);
@@ -755,6 +761,7 @@ void BitcoinGUI::setWalletController(WalletController* wallet_controller, bool s
     m_restore_wallet_action->setEnabled(true);
     m_migrate_wallet_action->setEnabled(true);
     m_migrate_wallet_action->setMenu(m_migrate_wallet_menu);
+    m_import_descriptor_to_wallet_action->setEnabled(true);
 
     GUIUtil::ExceptionSafeConnect(wallet_controller, &WalletController::walletAdded, this, &BitcoinGUI::addWallet);
     connect(wallet_controller, &WalletController::walletRemoved, this, &BitcoinGUI::removeWallet);
