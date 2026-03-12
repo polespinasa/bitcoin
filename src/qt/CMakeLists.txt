@@ -219,6 +219,8 @@ if(ENABLE_WALLET)
       walletmodeltransaction.h
       walletview.cpp
       walletview.h
+      importdescriptorsdialog.cpp
+      importdescriptorsdialog.h
   )
   target_link_libraries(bitcoinqt
     PRIVATE
