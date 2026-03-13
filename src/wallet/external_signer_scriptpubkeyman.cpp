@@ -87,17 +87,20 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySigned
 
     // Already complete if every input is now signed
     bool complete = true;
-    for (size_t i = 0; i < psbt.inputs.size(); ++i){
-        // TODO: for multisig wallets, we should only care if all _our_ inputs are signed
-        if (psbt.inputs[i].non_witness_utxo){
-            if (DescriptorScriptPubKeyMan::IsMine(psbt.inputs[i].non_witness_utxo->vout[psbt.tx->vin[i].prevout.n].scriptPubKey)){
-                complete &= PSBTInputSigned(psbt.inputs[i]);
-            }
-        } else if (!psbt.inputs[i].witness_utxo.IsNull()){
-            if (DescriptorScriptPubKeyMan::IsMine(psbt.inputs[i].witness_utxo.scriptPubKey)){
-                complete &= PSBTInputSigned(psbt.inputs[i]);
-            }
+    size_t i = 0;
+    for (const auto& input : psbt.inputs){
+        const CScript* scriptPubKey = nullptr;
+        if (input.non_witness_utxo){
+            scriptPubKey = &input.non_witness_utxo->vout[psbt.tx->vin[i].prevout.n].scriptPubKey;
+        } else if (!input.witness_utxo.IsNull()){
+            scriptPubKey = &input.witness_utxo.scriptPubKey;
         }
+        // Can early exit if we find one IsMine input not signed
+        if (scriptPubKey && DescriptorScriptPubKeyMan::IsMine(*scriptPubKey) && !PSBTInputSigned(input)) {
+            complete = false;
+            break;
+        }
+        ++i;
     }
     if (complete) return {};
 
