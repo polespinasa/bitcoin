@@ -52,7 +52,6 @@ namespace wallet{
 
     std::vector<ImportDescriptorResult> ProcessDescriptorsImport(CWallet& wallet,
         std::vector<ImportDescriptorRequest> requests);
-
 }
 
 #endif // BITCOIN_WALLET_IMPORTS_H

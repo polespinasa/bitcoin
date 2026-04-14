@@ -159,7 +159,6 @@ static wallet::ImportDescriptorRequest ProcessUniValueDescriptor(const UniValue&
     return request;
 }
 
-
 RPCHelpMan importdescriptors()
 {
     return RPCHelpMan{
