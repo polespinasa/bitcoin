@@ -43,6 +43,14 @@ struct ImportDescriptorRequest {
     std::optional<std::pair<int64_t,int64_t>> range;
     std::optional<int64_t> next_index;
 };
+
+ImportDescriptorResult ImportDescriptor(CWallet& wallet,
+    ImportDescriptorRequest request,
+    int64_t timestamp) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet);
+
+std::vector<ImportDescriptorResult> ProcessDescriptorsImport(CWallet& wallet,
+    std::vector<ImportDescriptorRequest> requests);
+
 } // namespace wallet
 
 #endif // BITCOIN_WALLET_IMPORTS_H
