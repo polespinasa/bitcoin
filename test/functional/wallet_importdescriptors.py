@@ -825,6 +825,34 @@ class ImportDescriptorsTest(BitcoinTestFramework):
                 warnings=[expected_warning],
             )
 
+        self.log.info("Test importdescriptors fails when wallet is already rescanning")
+        wallet_name = "rescan_wallet"
+        self.nodes[0].createwallet(wallet_name=wallet_name, blank=True)
+        w_rescan = self.nodes[0].get_wallet_rpc(wallet_name)
+
+        def wallet_cli():
+            return self.nodes[0].cli(f"-rpcwallet={wallet_name}")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as thread:
+            slow_desc = descsum_create("pkh(" + xpriv + "/1h/*h)")
+            # importdescriptors with timestamp=0 triggers key derivation + rescan,
+            # which should hold WalletRescanReserver for a few seconds.
+            with self.nodes[0].assert_debug_log(
+                expected_msgs=["Rescan started from block 0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206... (slow variant inspecting all blocks)"],
+                timeout=10,
+            ):
+                thread.submit(wallet_cli().importdescriptors,
+                    [{"desc": slow_desc, "timestamp": 0, "active": True, "range": [0, 4000], "next_index": 0}])
+
+            # while WalletRescanReserver is held trying to import a descriptor should fail.
+            assert_raises_rpc_error(-4, "Wallet is currently rescanning. Abort existing rescan or wait.",
+                wallet_cli().importdescriptors,
+                [{"desc": slow_desc, "timestamp": "now"}])
+
+        # After the rescan is finished, importdescriptors should succeed with a fresh descriptor.
+        result = w_rescan.importdescriptors([{"desc": descsum_create("pkh(" + get_generate_key().privkey + ")"), "timestamp": "now"}])
+        assert_equal(result[0]['success'], True)
+
 
 if __name__ == '__main__':
     ImportDescriptorsTest(__file__).main()
