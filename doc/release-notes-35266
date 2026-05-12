@@ -1,0 +1,7 @@
+RPC
+---
+
+The `migratewallet` RPC now gives the option to not load the wallet after migrating it.
+This will allow pruned nodes that cannot migrate an old wallet to be able to migrate it.
+Note that to use the new wallet it must be loaded to a full node anyway.
+
