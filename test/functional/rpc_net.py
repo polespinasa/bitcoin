@@ -64,12 +64,16 @@ class NetTest(BitcoinTestFramework):
         self.num_nodes = 2
         self.extra_args = [
             ["-minrelaytxfee=0.00001000"],
-            ["-minrelaytxfee=0.00000500"],
+            [
+                "-minrelaytxfee=0.00000500",
+                "-privatebroadcast",
+            ],
         ]
         # Specify a non-working proxy to make sure no actual connections to public IPs are attempted
         for args in self.extra_args:
             args.append("-proxy=127.0.0.1:1")
         self.supports_cli = False
+        self.disable_autoconnect = False
 
     def run_test(self):
         # We need miniwallet to make a transaction
@@ -213,6 +217,8 @@ class NetTest(BitcoinTestFramework):
         assert_equal(info['connections'], 2)
         assert_equal(info['connections_in'], 1)
         assert_equal(info['connections_out'], 1)
+        assert_equal(info['privatebroadcast'], "disabled")
+        assert_equal(self.nodes[1].getnetworkinfo()['privatebroadcast'], "enabled")
 
         with self.nodes[0].assert_debug_log(expected_msgs=['SetNetworkActive: false\n']):
             self.nodes[0].setnetworkactive(state=False)
