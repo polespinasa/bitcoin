@@ -652,6 +652,7 @@ static RPCMethod getnetworkinfo()
                             {RPCResult::Type::STR, "SERVICE_NAME", "the service name"},
                         }},
                         {RPCResult::Type::BOOL, "localrelay", "true if transaction relay is requested from peers"},
+                        {RPCResult::Type::STR, "privatebroadcast", "private broadcast status (one of \"enabled\", \"disabled\")"},
                         {RPCResult::Type::NUM, "timeoffset", "the time offset"},
                         {RPCResult::Type::NUM, "connections", "the total number of connections"},
                         {RPCResult::Type::NUM, "connections_in", "the number of inbound connections"},
@@ -709,6 +710,7 @@ static RPCMethod getnetworkinfo()
     if (node.peerman) {
         auto peerman_info{node.peerman->GetInfo()};
         obj.pushKV("localrelay", !peerman_info.ignores_incoming_txs);
+        obj.pushKV("privatebroadcast", peerman_info.private_broadcast ? "enabled" : "disabled");
         obj.pushKV("timeoffset", Ticks<std::chrono::seconds>(peerman_info.median_outbound_time_offset));
     }
     if (node.connman) {
