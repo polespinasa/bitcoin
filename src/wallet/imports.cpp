@@ -6,7 +6,7 @@
 #include <wallet/imports.h>
 
 namespace wallet{
-ImportDescriptorResult ImportDescriptor(CWallet& wallet, ImportDescriptorRequest request, int64_t timestamp) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet)
+ImportDescriptorResult ImportDescriptor(CWallet& wallet, ImportDescriptorRequest request) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet)
 {
     AssertLockHeld(wallet.cs_wallet);
 
@@ -150,7 +150,7 @@ ImportDescriptorResult ImportDescriptor(CWallet& wallet, ImportDescriptorRequest
                 }
             }
 
-        WalletDescriptor w_desc(std::move(parsed_desc), timestamp, range_start, range_end, next_index);
+        WalletDescriptor w_desc(std::move(parsed_desc), request.timestamp.value(), range_start, range_end, next_index);
 
         // Add descriptor to wallet
         auto spk_manager_res = wallet.AddWalletDescriptor(w_desc, keys, label_str, desc_internal);
@@ -183,8 +183,6 @@ std::vector<ImportDescriptorResult> ProcessDescriptorsImport(CWallet& wallet,
     std::vector<ImportDescriptorRequest> requests)
 {
     std::vector<ImportDescriptorResult> response;
-    std::vector<int64_t> resolved_timestamps;
-    resolved_timestamps.reserve(requests.size());
 
     // Make sure the results are valid at least up to the most recent block
     // the user could have gotten from another RPC command prior to now
@@ -202,7 +200,7 @@ std::vector<ImportDescriptorResult> ProcessDescriptorsImport(CWallet& wallet,
     // Ensure that the wallet is not locked for the remainder of this call,
     // as the passphrase is used to top up the keypool.
     LOCK(wallet.m_relock_mutex);
-    const int64_t minimum_timestamp = 1;
+    const int64_t minimum_timestamp = 0;
     int64_t now = 0;
     int64_t lowest_timestamp = 0;
     bool rescan = false;
@@ -222,8 +220,8 @@ std::vector<ImportDescriptorResult> ProcessDescriptorsImport(CWallet& wallet,
 
         for (ImportDescriptorRequest& request : requests) {
             const int64_t timestamp = std::max(request.timestamp.value_or(now), minimum_timestamp);
-            resolved_timestamps.push_back(timestamp);
-            ImportDescriptorResult result = ImportDescriptor(wallet, request, timestamp);
+            request.timestamp = timestamp;
+            ImportDescriptorResult result = ImportDescriptor(wallet, request);
             response.push_back(result);
 
             if (result.result_code == ImportDescriptorResult::ImportResultCode::OK) {
@@ -261,15 +259,14 @@ std::vector<ImportDescriptorResult> ProcessDescriptorsImport(CWallet& wallet,
                 // range, or if the import result already has an error set, let
                 // the result stand unmodified. Otherwise replace the result
                 // with an error message.
-                const int64_t timestamp{resolved_timestamps.at(i)};
+                const int64_t timestamp{requests.at(i).timestamp.value()};
                 if (scanned_time <= timestamp || result.result_code != ImportDescriptorResult::ImportResultCode::OK) continue;
-                const int64_t error_timestamp{requests.at(i).timestamp.value_or(timestamp)};
 
                 std::string error_msg = strprintf("Rescan failed for descriptor with timestamp %d. There "
                     "was an error reading a block from time %d, which is after or within %d seconds "
                     "of key creation, and could contain transactions pertaining to the desc. As a "
                     "result, transactions and coins using this desc may not appear in the wallet.",
-                    error_timestamp, scanned_time - TIMESTAMP_WINDOW - 1, TIMESTAMP_WINDOW);
+                    timestamp, scanned_time - TIMESTAMP_WINDOW - 1, TIMESTAMP_WINDOW);
                 if (wallet.chain().havePruned()) {
                     error_msg += strprintf(" This error could be caused by pruning or data corruption "
                         "(see bitcoind log for details) and could be dealt with by downloading and "
