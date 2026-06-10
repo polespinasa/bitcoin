@@ -45,6 +45,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <numeric>
 
 using interfaces::BlockRef;
 using interfaces::BlockTemplate;
@@ -305,12 +306,13 @@ static RPCMethod generatetoaddress()
 static RPCMethod generateblock()
 {
     return RPCMethod{"generateblock",
-        "Mine a block with a set of ordered transactions or mempool transactions to a specified group of addresses or descriptors and return the block hash.\n"
+        "Mine a block with a set of ordered transactions or mempool transactions to a specified group of addresses or descriptors and the corresponding amount in sats to each one, and return the block hash.\n"
         "Transaction fees are not collected in the block reward.",
         {
             {"output", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "The addresses or descriptors to split, in equal parts, the coinbase reward among.\n"
                 "If no outputs are provided the coinbase transaction will burn the coins into an OP_RETURN output.\n"
-                "If only one output is desired a simple address or descriptor can be provided without using JSON format",
+                "If only one output is desired a simple address or descriptor can be provided without using JSON format\n"
+                "Optionally, each output can be specified as an object {\"address/descriptor\": amount} to assign a fixed amount in satoshis; any remaining reward is then split equally among all outputs.",
                 {
                     {"output", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "A valid address or descriptor"},
                 },
@@ -340,6 +342,7 @@ static RPCMethod generateblock()
             + HelpExampleCli("generateblock", R"("myaddress" [])")
             + HelpExampleCli("generateblock", R"('["myaddress1", "myaddress2"]')")
             + HelpExampleCli("generateblock", R"('["myaddress1", "myaddress2"]' [])")
+            + HelpExampleCli("generateblock", R"('[{"myaddress1":100000000},{"myaddress2":200000000}]')")
         },
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -355,14 +358,34 @@ static RPCMethod generateblock()
     }
 
     std::vector<CScript> coinbase_outputs_scripts;
+    std::vector<CAmount> custom_rewards;
     if (address_or_descriptor.empty()) {
         coinbase_outputs_scripts.push_back(CScript() << OP_RETURN);
+        custom_rewards.push_back(0);
     }
     for (size_t i = 0; i < address_or_descriptor.size(); i++) {
         std::string error;
         CScript coinbase_output_script;
-        if (!getScriptFromDescriptor(address_or_descriptor[i].get_str(), coinbase_output_script, error)) {
-            const auto destination = DecodeDestination(address_or_descriptor[i].get_str());
+        std::string address_or_descriptor_str;
+        const UniValue& address_or_descriptor_entry = address_or_descriptor[i];
+        CAmount custom_reward = 0;
+
+        if (address_or_descriptor_entry.isObject() && !address_or_descriptor_entry.empty()) {
+            if (address_or_descriptor_entry.size() != 1) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Custom reward object must contain exactly one \"address/descriptor\": amount pair");
+            }
+            custom_reward = address_or_descriptor_entry.getValues()[0].getInt<CAmount>();
+            if (custom_reward < 0) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Custom value cannot be negative");
+            }
+            address_or_descriptor_str = address_or_descriptor_entry.getKeys()[0];
+        } else if (address_or_descriptor_entry.isStr()) {
+            address_or_descriptor_str = address_or_descriptor_entry.get_str();
+        } else {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Custom reward must be a string address/descriptor or an object {\"address/descriptor\": amount}");
+        }
+        if (!getScriptFromDescriptor(address_or_descriptor_str, coinbase_output_script, error)) {
+            const auto destination = DecodeDestination(address_or_descriptor_str);
             if (!IsValidDestination(destination)) {
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Error: Invalid address or descriptor");
             }
@@ -370,6 +393,8 @@ static RPCMethod generateblock()
         } else {
             coinbase_outputs_scripts.push_back(coinbase_output_script);
         }
+
+        custom_rewards.push_back(custom_reward);
     }
 
     NodeContext& node = EnsureAnyNodeContext(request.context);
@@ -418,8 +443,6 @@ static RPCMethod generateblock()
 
         const auto num_outputs = coinbase_outputs_scripts.size();
         CAmount total_reward = block.vtx[0]->vout[0].nValue;
-        CAmount reward_parted = total_reward / num_outputs;
-        CAmount remainder = total_reward % num_outputs;
 
         CMutableTransaction mutable_coinbase(*block.vtx.at(0));
         int witness_index = GetWitnessCommitmentIndex(block);
@@ -431,12 +454,26 @@ static RPCMethod generateblock()
             has_witness_commitment = true;
         }
 
+        CAmount total_value = std::accumulate(custom_rewards.begin(), custom_rewards.end(), CAmount{0});
+        if (total_reward < total_value) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Sum of custom rewards exceeds the total block reward");
+        }
+
+        const CAmount extra = total_reward - total_value;
+        const CAmount reward_parted = num_outputs > 0 ? extra / num_outputs : 0;
+        const CAmount remainder = num_outputs > 0 ? extra % num_outputs : 0;
+
         mutable_coinbase.vout.clear();
         for (size_t i = 0; i < num_outputs; ++i) {
-            CAmount out_reward = (i < static_cast<size_t>(remainder) ? reward_parted + 1 : reward_parted);
-            CTxOut new_tx_out(out_reward, coinbase_outputs_scripts[i]);
+            CAmount out_reward = reward_parted;
+            if (custom_rewards[i] > 0) {
+                out_reward += custom_rewards[i];
+            }
+            CAmount out_reward_final = (i < static_cast<size_t>(remainder) ? out_reward +1 : out_reward);
+            CTxOut new_tx_out(out_reward_final, coinbase_outputs_scripts[i]);
             mutable_coinbase.vout.push_back(new_tx_out);
         }
+
         if (has_witness_commitment) {
             mutable_coinbase.vout.push_back(witness_output);
         }
