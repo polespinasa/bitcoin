@@ -5,14 +5,15 @@
 """Test generate* RPCs."""
 
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.wallet import MiniWallet
+from test_framework.wallet import MiniWallet, MiniWalletMode
 from test_framework.util import (
     assert_equal,
     assert_raises_rpc_error,
 )
-
+from test_framework.messages import COIN
 
 class RPCGenerateTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -69,6 +70,38 @@ class RPCGenerateTest(BitcoinTestFramework):
         assert_equal(len(block['tx']), 1)
         assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
         assert_equal(block['tx'][0]['vout'][1]['scriptPubKey']['address'], address2)
+
+        self.log.info('Generate an empty block to a list of descriptors with custom reward')
+        hash = self.generateblock(node, [{'addr(' + address + ')': 10*COIN},
+            {'addr(' + address2 + ')': 15*COIN}], [])['hash']
+        block = node.getblock(blockhash=hash, verbosity=2)
+        assert_equal(len(block['tx']), 1)
+        assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
+        assert_equal(block['tx'][0]['vout'][1]['scriptPubKey']['address'], address2)
+        assert_equal(block['tx'][0]['vout'][0]['value'], Decimal('10.00000000'))
+        assert_equal(block['tx'][0]['vout'][1]['value'], Decimal('15.00000000'))
+
+        self.log.info('Generate an empty block to a list of addresses with custom reward and check remainder distribution')
+        hash = self.generateblock(node, [{address: 8*COIN}, {address2: 12*COIN - 1}], [])['hash']
+        block = node.getblock(blockhash=hash, verbosity=2)
+        assert_equal(len(block['tx']), 1)
+        assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
+        assert_equal(block['tx'][0]['vout'][1]['scriptPubKey']['address'], address2)
+        assert_equal(block['tx'][0]['vout'][0]['value'], Decimal('10.50000001'))
+        assert_equal(block['tx'][0]['vout'][1]['value'], Decimal('14.49999999'))
+        assert_equal(block['tx'][0]['vout'][0]['value'] + block['tx'][0]['vout'][1]['value'], Decimal('25.00000000'))
+
+        address3 = miniwallet.get_address()
+        self.log.info('Generate an empty block to a list of addresses with and without custom reward')
+        hash = self.generateblock(node, [address, {address2: 8*COIN}, address3], [])['hash']
+        block = node.getblock(blockhash=hash, verbosity=2)
+        assert_equal(len(block['tx']), 1)
+        assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
+        assert_equal(block['tx'][0]['vout'][1]['scriptPubKey']['address'], address2)
+        assert_equal(block['tx'][0]['vout'][2]['scriptPubKey']['address'], address3)
+        assert_equal(block['tx'][0]['vout'][0]['value'], Decimal('5.66666667'))
+        assert_equal(block['tx'][0]['vout'][1]['value'], Decimal('13.66666667'))
+        assert_equal(block['tx'][0]['vout'][2]['value'], Decimal('5.66666666'))
 
         self.log.info('Generate an empty block to a combo descriptor with compressed pubkey')
         combo_key = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
@@ -164,6 +197,24 @@ class RPCGenerateTest(BitcoinTestFramework):
         self.log.info('Fail to generate block with a descriptor missing a private key')
         child_descriptor = 'pkh(tpubD6NzVbkrYhZ4XgiXtGrdW5XDAPFCL9h7we1vwNCpn8tGbBcgfVYjXyhWo4E1xkh56hjod1RhGjxbaTLV3X4FyWuejifB9jusQ46QzG87VKp/0\'/0)'
         assert_raises_rpc_error(-5, 'Cannot derive script without private keys', self.generateblock, node, child_descriptor, [])
+
+        self.log.info('Fail to generate block with a custom reward object with negative reward')
+        reward_object = [{address: -8*COIN}]
+        assert_raises_rpc_error(-8, 'Error: Custom value cannot be negative', self.generateblock, node, reward_object, [])
+
+        self.log.info('Fail to generate block with a custom reward empty object')
+        reward_object = [{}]
+        assert_raises_rpc_error(-8, 'Error: Custom reward must be a string address/descriptor or an object {\"address/descriptor\": amount}', self.generateblock, node, reward_object, [])
+
+        self.log.info('Fail to generate block with a bigger reward than the block reward')
+        reward_object = [{address: 51*COIN}]
+        assert_raises_rpc_error(-8, 'Error: Sum of custom rewards exceeds the total block reward', self.generateblock, node, reward_object, [])
+
+        miniwallet2 = MiniWallet(node, mode=MiniWalletMode.ADDRESS_OP_TRUE, tag_name="second_wallet")
+        address4 = miniwallet2.get_address()
+        self.log.info('Fail to generate block with with more than one \"address/descriptor\" in custom reward object')
+        reward_object = [{address: 100000000, address4: 200000000}]
+        assert_raises_rpc_error(-8, 'Error: Custom reward object must contain exactly one \"address/descriptor\": amount pair', self.generateblock, node, reward_object, [])
 
     def test_generate(self):
         message = (
