@@ -70,6 +70,24 @@ class RPCGenerateTest(BitcoinTestFramework):
         assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
         assert_equal(block['tx'][0]['vout'][1]['scriptPubKey']['address'], address2)
 
+        self.log.info('Generate an empty block to a list of addresses with custom reward')
+        hash = self.generateblock(node, [{address: 10*10**8}, {address2: 15*10**8}], [])['hash']
+        block = node.getblock(blockhash=hash, verbosity=2)
+        assert_equal(len(block['tx']), 1)
+        assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
+        assert_equal(block['tx'][0]['vout'][1]['scriptPubKey']['address'], address2)
+        assert_equal(block['tx'][0]['vout'][0]['value'], 10)
+        assert_equal(block['tx'][0]['vout'][1]['value'], 15)
+
+        self.log.info('Generate an empty block to a list of addresses with custom reward')
+        hash = self.generateblock(node, [{address: 10*10**8}, {address2: 10*10**8}], [])['hash']
+        block = node.getblock(blockhash=hash, verbosity=2)
+        assert_equal(len(block['tx']), 1)
+        assert_equal(block['tx'][0]['vout'][0]['scriptPubKey']['address'], address)
+        assert_equal(block['tx'][0]['vout'][1]['scriptPubKey']['address'], address2)
+        assert_equal(block['tx'][0]['vout'][0]['value'], 12.5)
+        assert_equal(block['tx'][0]['vout'][1]['value'], 12.5)
+
         self.log.info('Generate an empty block to a combo descriptor with compressed pubkey')
         combo_key = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
         combo_address = 'bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080'
