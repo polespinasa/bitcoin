@@ -5,7 +5,9 @@
 #include <crypto/sha256.h>
 
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <string_view>
 
 namespace {
 
@@ -311,4 +313,13 @@ constexpr std::array<std::string_view, 2048> ENGLISH_WORDLIST{
     "yellow", "you", "young", "youth", "zebra", "zero", "zone", "zoo",
 };
 
+std::optional<uint16_t> FindWordIndex(std::string_view word)
+{
+    for (size_t i{0}; i < ENGLISH_WORDLIST.size(); ++i) {
+        if (ENGLISH_WORDLIST[i] == word) return static_cast<uint16_t>(i);
+    }
+    return std::nullopt;
+}
+
 } // anonymous namespace
+
