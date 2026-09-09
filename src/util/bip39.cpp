@@ -3,14 +3,39 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <crypto/sha256.h>
+#include <crypto/hmac_pbkdf2.h>
+#include <span.h>
+#include <support/allocators/secure.h>
+#include <util/expected.h>
+#include <util/string.h>
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
+constexpr size_t SEED_SIZE{64};
+constexpr uint32_t PBKDF2_ROUNDS{2048};
+constexpr std::string_view SALT_PREFIX{"mnemonic"};
+constexpr std::array<size_t, 5> VALID_WORD_COUNTS{12, 15, 18, 21, 24};
+
+//! Append the bytes of str to a securely allocated buffer.
+void PushBytes(std::vector<std::byte, secure_allocator<std::byte>>& buf, std::string_view str)
+{
+    buf.reserve(buf.size() + str.size());
+    for (char c : str) {
+        buf.push_back(static_cast<std::byte>(static_cast<unsigned char>(c)));
+    }
+}
+
+//! Check the checksum encoded in a mnemonic's word indexes as BIP39 defines
 bool IsValidChecksum(std::span<const uint16_t> indexes)
 {
     const size_t total_bits{indexes.size() * 11};
@@ -47,7 +72,51 @@ bool IsValidChecksum(std::span<const uint16_t> indexes)
     return claimed_checksum == static_cast<unsigned int>(hash[0]) >> (8 - checksum_bits);
 }
 
+// Forward declaration, the real function is hidden under the wordlist
+std::optional<uint16_t> FindWordIndex(std::string_view word);
+
 } // anonymous namespace
+
+
+util::Expected<std::vector<std::byte, secure_allocator<std::byte>>, std::string> FromMnemonicToSeed(std::span<const std::string> words, const std::string& passphrase)
+{
+    if (std::find(VALID_WORD_COUNTS.begin(), VALID_WORD_COUNTS.end(), words.size()) == VALID_WORD_COUNTS.end()) {
+        return util::Unexpected{"Invalid mnemonic: expected 12, 15, 18, 21, or 24 words"};
+    }
+
+    // Check each word exist in the original wordlist and store its index.
+    std::vector<uint16_t> indexes;
+    indexes.reserve(words.size());
+    for (const std::string& word : words) {
+        if (auto index{FindWordIndex(word)}) {
+            indexes.push_back(*index);
+        } else {
+            return util::Unexpected{"Invalid mnemonic: unknown word \"" + word + "\""};
+        }
+    }
+
+    // Verify the checksum encoded using the index
+    if (!IsValidChecksum(indexes)) {
+        return util::Unexpected{"Invalid mnemonic: checksum mismatch"};
+    }
+
+    std::vector<std::byte, secure_allocator<std::byte>> mnemonic;
+    PushBytes(mnemonic, util::Join(words, " "));
+
+    // The salt is the string "mnemonic" followed by the passphrase.
+    std::vector<std::byte, secure_allocator<std::byte>> salt;
+    salt.reserve(SALT_PREFIX.size() + passphrase.size());
+    PushBytes(salt, SALT_PREFIX);
+    PushBytes(salt, passphrase);
+
+    std::vector<std::byte, secure_allocator<std::byte>> seed(SEED_SIZE);
+    PBKDF2_HMAC_SHA512(UCharCast(mnemonic.data()), mnemonic.size(),
+                       UCharCast(salt.data()), salt.size(),
+                       PBKDF2_ROUNDS,
+                       UCharCast(seed.data()), seed.size());
+
+    return util::Expected<std::vector<std::byte, secure_allocator<std::byte>>, std::string>{std::move(seed)};
+}
 
 namespace {
 
