@@ -936,6 +936,79 @@ static RPCMethod exportwatchonlywallet()
     };
 }
 
+static std::pair<CExtKey, KeyOriginInfo> DeriveHDKey(const std::shared_ptr<const CWallet> wallet, const std::vector<uint32_t>& path, std::optional<CExtPubKey> xpub)
+{
+    if (wallet->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS)) {
+                // Watch-only wallets can't contain unused(KEY) descriptors
+                throw JSONRPCError(RPC_WALLET_ERROR, "derivehdkey is not available for watch-only wallets");
+    }
+
+    if (!HasHardenedDerivation(path)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Derivation path requires at least one hardened step");
+    }
+
+    LOCK(wallet->cs_wallet);
+
+    // The RPC requires a hardened derivation step, so always unlock
+    // the wallet.
+    EnsureWalletIsUnlocked(*wallet);
+
+
+    if (xpub.has_value()) {
+        if (!xpub.value().pubkey.IsValid()) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to parse HD key. Please provide a valid xpub");
+        }
+
+        // Accept an xpub from an active or unused(KEY) descriptor, but
+        // not from a (used) inactive one.
+        std::set<CExtPubKey> xpub_candidates;
+        for (const auto& candidate : wallet->GetHDPubKeys(HDKeyFilter::UnusedKey)) {
+            xpub_candidates.insert(candidate.first);
+        }
+        for (const auto& candidate : wallet->GetHDPubKeys(HDKeyFilter::Active)) {
+            xpub_candidates.insert(candidate.first);
+        }
+        if (!xpub_candidates.contains(*xpub)) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "HD key is not used by an active or unused(KEY) descriptor");
+        }
+    }
+
+    // If hdkey was not specified, try to look it up. First consider
+    // unused(KEY) descriptors. Otherwise look for active descriptors.
+    if (!xpub.has_value()) {
+        HDPubKeyMap wallet_xpubs{wallet->GetHDPubKeys(HDKeyFilter::UnusedKey)};
+
+        if (wallet_xpubs.size() > 1) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to determine which HD key to use. Please specify with 'hdkey'");
+        } else if (wallet_xpubs.size() == 1) {
+            xpub = wallet_xpubs.begin()->first;
+        } else {
+            HDPubKeyMap active_xpubs = wallet->GetHDPubKeys(HDKeyFilter::Active);
+            if (active_xpubs.empty()) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No active or unused(KEY) descriptor found");
+            }
+
+            if (active_xpubs.size() > 1) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to determine which HD key to use from active descriptors. Please specify with 'hdkey'");
+            }
+
+            xpub = active_xpubs.begin()->first;
+        }
+    }
+
+    std::optional<CExtKey> xprv{wallet->GetExtKey(*xpub)};
+    if (!xprv) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Private key for %s is not known", EncodeExtPubKey(*xpub)));
+    }
+
+    std::optional<std::pair<CExtKey, KeyOriginInfo>> child{DeriveExtKey(*xprv, path)};
+    if (!child) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Unable to derive HD key at the requested path");
+    }
+
+    return *child;
+}
+
 RPCMethod derivehdkey()
 {
     return RPCMethod{
@@ -967,87 +1040,24 @@ RPCMethod derivehdkey()
             const std::shared_ptr<const CWallet> wallet = GetWalletForJSONRPCRequest(request);
             if (!wallet) return UniValue::VNULL;
 
-            if (wallet->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS)) {
-                // Watch-only wallets can't contain unused(KEY) descriptors
-                throw JSONRPCError(RPC_WALLET_ERROR, "derivehdkey is not available for watch-only wallets");
-            }
-
             std::vector<uint32_t> path = ParsePathBIP32(request.params[0].get_str());
             UniValue options{request.params[1].isNull() ? UniValue::VOBJ : request.params[1]};
             const bool priv{options.exists("private") ? options["private"].get_bool() : false};
             UniValue hdkey{options["hdkey"]};
-            if (!HasHardenedDerivation(path)) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "Derivation path requires at least one hardened step");
-            }
-
-            LOCK(wallet->cs_wallet);
-
-            // The RPC requires a hardened derivation step, so always unlock
-            // the wallet.
-            EnsureWalletIsUnlocked(*wallet);
-
-            CExtPubKey xpub;
-            if (!hdkey.isNull()) {
+            std::optional<CExtPubKey> xpub;
+            if(!hdkey.isNull()) {
                 xpub = DecodeExtPubKey(hdkey.get_str());
-                if (!xpub.pubkey.IsValid()) {
-                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to parse HD key. Please provide a valid xpub");
-                }
-
-                // Accept an xpub from an active or unused(KEY) descriptor, but
-                // not from a (used) inactive one.
-                std::set<CExtPubKey> xpub_candidates;
-                for (const auto& candidate : wallet->GetHDPubKeys(HDKeyFilter::UnusedKey)) {
-                    xpub_candidates.insert(candidate.first);
-                }
-                for (const auto& candidate : wallet->GetHDPubKeys(HDKeyFilter::Active)) {
-                    xpub_candidates.insert(candidate.first);
-                }
-                if (!xpub_candidates.contains(xpub)) {
-                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "HD key is not used by an active or unused(KEY) descriptor");
-                }
             }
 
-            // If hdkey was not specified, try to look it up. First consider
-            // unused(KEY) descriptors. Otherwise look for active descriptors.
-            if (hdkey.isNull()) {
-                HDPubKeyMap wallet_xpubs{wallet->GetHDPubKeys(HDKeyFilter::UnusedKey)};
-
-                if (wallet_xpubs.size() > 1) {
-                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to determine which HD key to use. Please specify with 'hdkey'");
-                } else if (wallet_xpubs.size() == 1) {
-                    xpub = wallet_xpubs.begin()->first;
-                } else {
-                    HDPubKeyMap active_xpubs = wallet->GetHDPubKeys(HDKeyFilter::Active);
-                    if (active_xpubs.empty()) {
-                        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No active or unused(KEY) descriptor found");
-                    }
-
-                    if (active_xpubs.size() > 1) {
-                        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to determine which HD key to use from active descriptors. Please specify with 'hdkey'");
-                    }
-
-                    xpub = active_xpubs.begin()->first;
-                }
-            }
-
-            std::optional<CExtKey> xprv{wallet->GetExtKey(xpub)};
-            if (!xprv) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Private key for %s is not known", EncodeExtPubKey(xpub)));
-            }
-
-            std::optional<std::pair<CExtKey, KeyOriginInfo>> child{DeriveExtKey(*xprv, path)};
-            if (!child) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "Unable to derive HD key at the requested path");
-            }
-
+            std::pair<CExtKey, KeyOriginInfo> child{DeriveHDKey(wallet, path, xpub)};
             UniValue res{UniValue::VOBJ};
 
-            const std::string fingerprint{HexStr(child->second.fingerprint)};
+            const std::string fingerprint{HexStr(child.second.fingerprint)};
 
-            res.pushKV("origin", strprintf("[%s%s]", fingerprint, FormatHDKeypath(child->second.path)));
-            res.pushKV("xpub", EncodeExtPubKey(child->first.Neuter()));
+            res.pushKV("origin", strprintf("[%s%s]", fingerprint, FormatHDKeypath(child.second.path)));
+            res.pushKV("xpub", EncodeExtPubKey(child.first.Neuter()));
             if (priv) {
-                res.pushKV("xprv", EncodeExtKey(child->first));
+                res.pushKV("xprv", EncodeExtKey(child.first));
             }
             return res;
         },
