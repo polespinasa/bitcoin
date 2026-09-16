@@ -936,27 +936,33 @@ static RPCMethod exportwatchonlywallet()
     };
 }
 
-static std::pair<CExtKey, KeyOriginInfo> DeriveHDKey(const std::shared_ptr<const CWallet> wallet, const std::vector<uint32_t>& path, std::optional<CExtPubKey> xpub)
+static util::Expected<std::pair<CExtKey, KeyOriginInfo>, WalletError> DeriveHDKey(const std::shared_ptr<const CWallet> wallet, const std::vector<uint32_t>& path, std::optional<CExtPubKey> xpub)
 {
     if (wallet->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS)) {
-                // Watch-only wallets can't contain unused(KEY) descriptors
-                throw JSONRPCError(RPC_WALLET_ERROR, "derivehdkey is not available for watch-only wallets");
+        // Watch-only wallets can't contain unused(KEY) descriptors
+        return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+            _("derivehdkey is not available for watch-only wallets")}};
     }
 
     if (!HasHardenedDerivation(path)) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Derivation path requires at least one hardened step");
+        return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+        _("Derivation path requires at least one hardened step")}};
     }
 
     LOCK(wallet->cs_wallet);
 
     // The RPC requires a hardened derivation step, so always unlock
     // the wallet.
-    EnsureWalletIsUnlocked(*wallet);
+    if(wallet->IsLocked()) {
+        return util::Unexpected{WalletError{WalletErrorCode::UnlockNeeded,
+            _("Wallet need to be unlocked to perform this operation.")}};
+    }
 
 
     if (xpub.has_value()) {
         if (!xpub.value().pubkey.IsValid()) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to parse HD key. Please provide a valid xpub");
+            return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+            _("Unable to parse HD key. Please provide a valid xpub")}};
         }
 
         // Accept an xpub from an active or unused(KEY) descriptor, but
@@ -969,7 +975,8 @@ static std::pair<CExtKey, KeyOriginInfo> DeriveHDKey(const std::shared_ptr<const
             xpub_candidates.insert(candidate.first);
         }
         if (!xpub_candidates.contains(*xpub)) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "HD key is not used by an active or unused(KEY) descriptor");
+            return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+            _("HD key is not used by an active or unused(KEY) descriptor")}};
         }
     }
 
@@ -979,17 +986,20 @@ static std::pair<CExtKey, KeyOriginInfo> DeriveHDKey(const std::shared_ptr<const
         HDPubKeyMap wallet_xpubs{wallet->GetHDPubKeys(HDKeyFilter::UnusedKey)};
 
         if (wallet_xpubs.size() > 1) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to determine which HD key to use. Please specify with 'hdkey'");
+            return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+            _("Unable to determine which HD key to use. Please specify with 'hdkey'")}};
         } else if (wallet_xpubs.size() == 1) {
             xpub = wallet_xpubs.begin()->first;
         } else {
             HDPubKeyMap active_xpubs = wallet->GetHDPubKeys(HDKeyFilter::Active);
             if (active_xpubs.empty()) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No active or unused(KEY) descriptor found");
+                return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+                _("No active or unused(KEY) descriptor found")}};
             }
 
             if (active_xpubs.size() > 1) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to determine which HD key to use from active descriptors. Please specify with 'hdkey'");
+                return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+                _("Unable to determine which HD key to use from active descriptors. Please specify with 'hdkey'")}};
             }
 
             xpub = active_xpubs.begin()->first;
@@ -998,12 +1008,14 @@ static std::pair<CExtKey, KeyOriginInfo> DeriveHDKey(const std::shared_ptr<const
 
     std::optional<CExtKey> xprv{wallet->GetExtKey(*xpub)};
     if (!xprv) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Private key for %s is not known", EncodeExtPubKey(*xpub)));
+        return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+        strprintf(_("Private key for %s is not known"), EncodeExtPubKey(*xpub))}};
     }
 
     std::optional<std::pair<CExtKey, KeyOriginInfo>> child{DeriveExtKey(*xprv, path)};
     if (!child) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Unable to derive HD key at the requested path");
+        return util::Unexpected{WalletError{WalletErrorCode::GenericError,
+        _("Unable to derive HD key at the requested path")}};
     }
 
     return *child;
@@ -1049,15 +1061,19 @@ RPCMethod derivehdkey()
                 xpub = DecodeExtPubKey(hdkey.get_str());
             }
 
-            std::pair<CExtKey, KeyOriginInfo> child{DeriveHDKey(wallet, path, xpub)};
+            const auto child{DeriveHDKey(wallet, path, xpub)};
+            if (!child) {
+                auto error_code = child.error().code == WalletErrorCode::UnlockNeeded ? RPC_WALLET_UNLOCK_NEEDED : RPC_WALLET_ERROR;
+                throw JSONRPCError(error_code, child.error().message.original);
+            }
             UniValue res{UniValue::VOBJ};
 
-            const std::string fingerprint{HexStr(child.second.fingerprint)};
+            const std::string fingerprint{HexStr(child->second.fingerprint)};
 
-            res.pushKV("origin", strprintf("[%s%s]", fingerprint, FormatHDKeypath(child.second.path)));
-            res.pushKV("xpub", EncodeExtPubKey(child.first.Neuter()));
+            res.pushKV("origin", strprintf("[%s%s]", fingerprint, FormatHDKeypath(child->second.path)));
+            res.pushKV("xpub", EncodeExtPubKey(child->first.Neuter()));
             if (priv) {
-                res.pushKV("xprv", EncodeExtKey(child.first));
+                res.pushKV("xprv", EncodeExtKey(child->first));
             }
             return res;
         },
