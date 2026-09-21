@@ -119,6 +119,7 @@ BASE_SCRIPTS = [
     'wallet_fundrawtransaction.py',
     'wallet_bumpfee.py',
     'wallet_v3_txs.py',
+    'wallet_bip39_descriptor.py',
     'p2p_tx_download.py',
     'feature_txindex_compatibility.py',
     'wallet_avoidreuse.py',
