@@ -8,9 +8,20 @@
 //! passphrases that differ only in their encoding of the same characters
 //! (for example the precomposed U+00E9 and the decomposed U+0065 U+0301
 //! spellings of "café") derive the same keys.
+//!
+//! The algorithm: recursively replace every character with its canonical or
+//! compatibility decomposition (Hangul syllables are decomposed
+//! algorithmically), then order the combining marks of each combining
+//! sequence by canonical combining class.
 
+#include <util/nfkd.h>
+
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 
@@ -2447,4 +2458,128 @@ constexpr std::array<CombiningClass, 1002> COMBINING_CLASSES{
 };
 // === END GENERATED TABLES ===
 
+const Decomposition* FindDecomposition(uint32_t codepoint)
+{
+    const auto it{std::lower_bound(DECOMPOSITIONS.begin(), DECOMPOSITIONS.end(), codepoint,
+                                   [](const Decomposition& d, uint32_t cp) { return d.codepoint < cp; })};
+    if (it == DECOMPOSITIONS.end() || it->codepoint != codepoint) return nullptr;
+    return &*it;
+}
+
+uint8_t GetCombiningClass(uint32_t codepoint)
+{
+    const auto it{std::lower_bound(COMBINING_CLASSES.begin(), COMBINING_CLASSES.end(), codepoint,
+                                   [](const CombiningClass& c, uint32_t cp) { return c.codepoint < cp; })};
+    if (it == COMBINING_CLASSES.end() || it->codepoint != codepoint) return 0;
+    return it->combining_class;
+}
+
+//! Recursively replace codepoint with its canonical or compatibility
+//! decomposition.
+void DecomposeCharacter(uint32_t codepoint, std::vector<uint32_t>& out)
+{
+    if (codepoint >= HANGUL_S_BASE && codepoint < HANGUL_S_BASE + HANGUL_S_COUNT) {
+        const uint32_t sindex{codepoint - HANGUL_S_BASE};
+        out.push_back(HANGUL_L_BASE + sindex / HANGUL_N_COUNT);
+        out.push_back(HANGUL_V_BASE + (sindex % HANGUL_N_COUNT) / HANGUL_T_COUNT);
+        const uint32_t trailing{sindex % HANGUL_T_COUNT};
+        if (trailing > 0) out.push_back(HANGUL_T_BASE + trailing);
+        return;
+    }
+    if (const Decomposition* entry{FindDecomposition(codepoint)}) {
+        for (uint16_t i{0}; i < entry->sequence_length; ++i) {
+            DecomposeCharacter(DECOMPOSITION_SEQUENCES[entry->sequence_offset + i], out);
+        }
+        return;
+    }
+    out.push_back(codepoint);
+}
+
+//! Order each maximal run of combining marks (between starters) by their
+//! canonical combining class.
+void CanonicalOrder(std::vector<uint32_t>& sequence)
+{
+    for (size_t i{0}; i < sequence.size();) {
+        if (GetCombiningClass(sequence[i]) == 0) {
+            ++i;
+            continue;
+        }
+        const size_t run_start{i};
+        while (i < sequence.size() && GetCombiningClass(sequence[i]) != 0) ++i;
+        std::stable_sort(sequence.begin() + run_start, sequence.begin() + i,
+                         [](uint32_t a, uint32_t b) { return GetCombiningClass(a) < GetCombiningClass(b); });
+    }
+}
+
+bool DecodeUtf8(std::string_view in, std::vector<uint32_t>& out)
+{
+    size_t i{0};
+    while (i < in.size()) {
+        const uint8_t first{static_cast<uint8_t>(in[i])};
+        uint32_t codepoint{0};
+        size_t length{0};
+        if (first < 0x80) {
+            codepoint = first;
+            length = 1;
+        } else if ((first & 0xE0) == 0xC0) {
+            codepoint = first & 0x1F;
+            length = 2;
+        } else if ((first & 0xF0) == 0xE0) {
+            codepoint = first & 0x0F;
+            length = 3;
+        } else if ((first & 0xF8) == 0xF0) {
+            codepoint = first & 0x07;
+            length = 4;
+        } else {
+            return false;
+        }
+        if (length > in.size() - i) return false;
+        for (size_t j{1}; j < length; ++j) {
+            const uint8_t continuation{static_cast<uint8_t>(in[i + j])};
+            if ((continuation & 0xC0) != 0x80) return false;
+            codepoint = (codepoint << 6) | (continuation & 0x3F);
+        }
+        // Reject overlong encodings, surrogates and values above U+10FFFF.
+        if ((length == 2 && codepoint < 0x80) || (length == 3 && codepoint < 0x800) ||
+            (length == 4 && codepoint < 0x10000)) return false;
+        if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) return false;
+        out.push_back(codepoint);
+        i += length;
+    }
+    return true;
+}
+
+void EncodeUtf8(uint32_t codepoint, std::string& out)
+{
+    if (codepoint < 0x80) {
+        out += static_cast<char>(codepoint);
+    } else if (codepoint < 0x800) {
+        out += static_cast<char>(0xC0 | (codepoint >> 6));
+        out += static_cast<char>(0x80 | (codepoint & 0x3F));
+    } else if (codepoint < 0x10000) {
+        out += static_cast<char>(0xE0 | (codepoint >> 12));
+        out += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (codepoint & 0x3F));
+    } else {
+        out += static_cast<char>(0xF0 | (codepoint >> 18));
+        out += static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (codepoint & 0x3F));
+    }
+}
+
 } // anonymous namespace
+
+std::string NFKD(std::string_view utf8)
+{
+    std::vector<uint32_t> input;
+    if (!DecodeUtf8(utf8, input)) return std::string{utf8};
+    std::vector<uint32_t> decomposed;
+    decomposed.reserve(input.size());
+    for (const uint32_t codepoint : input) DecomposeCharacter(codepoint, decomposed);
+    CanonicalOrder(decomposed);
+    std::string out;
+    out.reserve(utf8.size());
+    for (const uint32_t codepoint : decomposed) EncodeUtf8(codepoint, out);
+    return out;
+}
