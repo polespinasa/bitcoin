@@ -26,6 +26,7 @@
 #include <tinyformat.h>
 #include <uint256.h>
 #include <util/bip32.h>
+#include <util/bip39.h>
 #include <util/check.h>
 #include <util/expected.h>
 #include <util/strencodings.h>
@@ -1979,6 +1980,176 @@ static DeriveType ParseDeriveType(std::vector<std::span<const char>>& split, boo
     return type;
 }
 
+std::vector<std::unique_ptr<PubkeyProvider>> ParseBip39(uint32_t& key_exp_index, const std::span<const char>& sp, FlatSigningProvider& out, std::string& error)
+{
+    using namespace script;
+
+    // Consume the complete "bip39(...)" sub-expression.
+    auto bip39_expr = Bip39Expr(sp);
+    if (!bip39_expr) {
+        error = "Invalid bip39() expression";
+        return {};
+    }
+    // Anything after the matching ')' is the derivation path.
+    std::span<const char> path_span = sp.subspan(bip39_expr->size());
+
+    // Parse the bracketed mnemonic word list. Strip the "bip39(" token and
+    // the closing ')' from the sub-expression.
+    std::span<const char> args = bip39_expr->subspan(6, bip39_expr->size() - 7);
+
+    // Consume the initial '[' befre the wordlist.
+    if (!Const("[", args)) {
+        error = "bip39(): expected '[' at the start of the mnemonic word list";
+        return {};
+    }
+    // Look for the closing braket, extract the wordlist and consume them in the main
+    // args span.
+    auto bracket = std::find(args.begin(), args.end(), ']');
+    if (bracket == args.end()) {
+        error = "bip39(): expected ']' at the end of the mnemonic word list";
+        return {};
+    }
+    std::span<const char> words_span{args.begin(), bracket};
+    args = args.subspan(std::distance(args.begin(), bracket) + 1);
+
+    // Parse words from the span and store them in a vector, remove
+    // surrounding spaces and commas.
+    std::vector<std::string> words;
+    if (words_span.empty()) {
+        error = "bip39(): empty mnemonic word list";
+        return {};
+    }
+    for (const auto& elem : Split(words_span, ',')) {
+        std::string word(elem.begin(), elem.end());
+        word.erase(word.begin(), std::find_if(word.begin(), word.end(), [](char c) { return !IsSpace(c); }));
+        word.erase(std::find_if(word.rbegin(), word.rend(), [](char c) { return !IsSpace(c); }).base(), word.end());
+        if (word.empty()) {
+            error = "bip39(): empty word in mnemonic word list";
+            return {};
+        }
+        words.push_back(std::move(word));
+    }
+
+    // Parse the optional quoted passphrase. Within the quotes only an
+    // unescaped '"' terminates it; the escape sequences '"', '\' and
+    // '\u{HEX}' are meaningful, everything else is literal.
+    std::string passphrase;
+    if (!args.empty()) {
+        if (!Const(",", args)) {
+            error = "bip39(): expected ',' before the passphrase";
+            return {};
+        }
+        while (Const(" ", args)) {} // Skip the spaces after the separator.
+        if (!Const("\"", args)) {
+            error = "bip39(): expected '\"' at the start of the passphrase";
+            return {};
+        }
+        bool terminated = false;
+        while (!args.empty()) {
+            const char ch = args.front();
+            args = args.subspan(1);
+            if (ch == '"') {
+                terminated = true;
+                break;
+            }
+            if (ch != '\\') {
+                passphrase += ch;
+                continue;
+            }
+            if (args.empty()) {
+                error = "bip39(): passphrase must not end with an unescaped '\\'";
+                return {};
+            }
+            const char esc = args.front();
+            args = args.subspan(1);
+            if (esc == '"' || esc == '\\') {
+                passphrase += esc;
+            } else if (esc == 'u') {
+                // A '\u{HEX}' escape encodes a Unicode scalar value.
+                if (!Const("{", args)) {
+                    error = "bip39(): expected '{' after the '\\u' escape sequence";
+                    return {};
+                }
+                auto brace = std::find(args.begin(), args.end(), '}');
+                if (brace == args.end()) {
+                    error = "bip39(): expected '}' at the end of the '\\u{HEX}' escape sequence";
+                    return {};
+                }
+                const std::string hexdigits(args.begin(), brace);
+                args = args.subspan(std::distance(args.begin(), brace) + 1);
+                // Note: IsHex() cannot be used here because it requires an
+                // even number of digits; the \u{HEX} escape expects 1 to 6
+                // hexadecimal digits.
+                if (hexdigits.empty() || hexdigits.size() > 6 || !std::all_of(hexdigits.begin(), hexdigits.end(), [](const char c) { return HexDigit(c) >= 0; })) {
+                    error = "bip39(): the '\\u{HEX}' escape sequence expects 1 to 6 hexadecimal digits";
+                    return {};
+                }
+                uint32_t codepoint = 0;
+                for (const char c : hexdigits) codepoint = (codepoint << 4) | HexDigit(c);
+                if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+                    error = "bip39(): the '\\u{HEX}' escape sequence must encode a Unicode scalar value";
+                    return {};
+                }
+                // Encode the code point as UTF-8.
+                if (codepoint < 0x80) {
+                    passphrase += static_cast<char>(codepoint);
+                } else if (codepoint < 0x800) {
+                    passphrase += static_cast<char>(0xC0 | (codepoint >> 6));
+                    passphrase += static_cast<char>(0x80 | (codepoint & 0x3F));
+                } else if (codepoint < 0x10000) {
+                    passphrase += static_cast<char>(0xE0 | (codepoint >> 12));
+                    passphrase += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                    passphrase += static_cast<char>(0x80 | (codepoint & 0x3F));
+                } else {
+                    passphrase += static_cast<char>(0xF0 | (codepoint >> 18));
+                    passphrase += static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+                    passphrase += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                    passphrase += static_cast<char>(0x80 | (codepoint & 0x3F));
+                }
+            } else {
+                error = strprintf("bip39(): unrecognized escape sequence '\\%c' in passphrase", esc);
+                return {};
+            }
+        }
+        if (!terminated) {
+            error = "bip39(): unterminated passphrase";
+            return {};
+        }
+        if (!args.empty()) {
+            error = "bip39(): unexpected characters after the passphrase";
+            return {};
+        }
+    }
+
+    auto seed = FromMnemonicToSeed(words, passphrase);
+    if (!seed.has_value()) {
+        error = strprintf("bip39(): %s", seed.error());
+        return {};
+    }
+    CExtKey master;
+    master.SetSeed(seed.value());
+    CExtPubKey master_pub = master.Neuter();
+    out.keys.emplace(master_pub.pubkey.GetID(), master.key);
+
+    // Parse the derivation path, including an optional multipath specifier
+    // and final '/*' range, like for an xprv key in ParsePubkeyInner.
+    bool apostrophe = false;
+    auto path_split = Split(path_span, '/');
+    if (!path_split.at(0).empty()) {
+        error = "bip39(): expected derivation path to start with '/'";
+        return {};
+    }
+    std::vector<KeyPath> paths;
+    DeriveType type = ParseDeriveType(path_split, apostrophe);
+    if (!ParseKeyPath(path_split, paths, apostrophe, error, /*allow_multipath=*/true)) return {};
+    std::vector<std::unique_ptr<PubkeyProvider>> ret;
+    for (auto& path : paths) {
+        ret.emplace_back(std::make_unique<BIP32PubkeyProvider>(key_exp_index, master_pub, std::move(path), type, apostrophe));
+    }
+    ++key_exp_index;
+    return ret;
+}
+
 /** Parse a public key that excludes origin information. */
 std::vector<std::unique_ptr<PubkeyProvider>> ParsePubkeyInner(uint32_t& key_exp_index, const std::span<const char>& sp, ParseScriptContext ctx, FlatSigningProvider& out, bool& apostrophe, std::string& error)
 {
@@ -2205,6 +2376,15 @@ std::vector<std::unique_ptr<PubkeyProvider>> ParsePubkey(uint32_t& key_exp_index
         }
         ++key_exp_index; // Increment key expression index for the MuSigPubkeyProvider too
         return ret;
+    }
+
+    // A "bip39()" key expression is self-contained (BIP-xxxx): its word list
+    // and quoted passphrase may contain '[', ']' and ',', which must not be
+    // interpreted as key origin brackets or key separators. Consume the whole
+    // sub-expression before the ordinary grammar looks at it.
+    std::span<const char> bip39_span = sp;
+    if (Const("bip39(", bip39_span, /*skip=*/false)) {
+        return ParseBip39(key_exp_index, sp, out, error);
     }
 
     auto origin_split = Split(sp, ']');
