@@ -5,6 +5,7 @@
 #ifndef BITCOIN_SCRIPT_PARSING_H
 #define BITCOIN_SCRIPT_PARSING_H
 
+#include <optional>
 #include <span>
 #include <string>
 
@@ -24,6 +25,17 @@ bool Const(const std::string& str, std::span<const char>& sp, bool skip = true);
  * is returned.
  */
 bool Func(const std::string& str, std::span<const char>& sp);
+
+/** Determine the extent of a "bip39(" key expression.
+ *
+ * If sp begins with the token "bip39(", return the complete expression,
+ * extending up to and including the ')' matching the one in the token.
+ *
+ * If sp does not begin with "bip39(", or the passphrase is unterminated, or no
+ * matching ')' is found, returns std::nullopt, in which case the caller should
+ * interpret sp with the ordinary grammar.
+ */
+std::optional<std::span<const char>> Bip39Expr(std::span<const char> sp);
 
 /** Extract the expression that sp begins with.
  *

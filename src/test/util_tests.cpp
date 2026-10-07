@@ -1287,6 +1287,41 @@ BOOST_AUTO_TEST_CASE(test_script_parsing)
     BOOST_CHECK_EQUAL(SpanToStr(result), "((a),(b),(c))");
     BOOST_CHECK_EQUAL(SpanToStr(sp), ",xxx");
 
+    // Expr(...) switches to the bip39() sub-grammar until the matching ')':
+    // the word list and the quoted passphrase may contain characters that are
+    // metacharacters of the surrounding grammar.
+    input = "bip39([legal, winner, thank], \"p,x)\")";
+    sp = input;
+    result = Expr(sp);
+    BOOST_CHECK_EQUAL(SpanToStr(result), "bip39([legal, winner, thank], \"p,x)\")");
+    BOOST_CHECK_EQUAL(SpanToStr(sp), "");
+
+    input = "pkh(bip39([legal, winner], \"foo)bar\"))";
+    sp = input;
+    result = Expr(sp);
+    BOOST_CHECK_EQUAL(SpanToStr(result), "pkh(bip39([legal, winner], \"foo)bar\"))");
+    BOOST_CHECK_EQUAL(SpanToStr(sp), "");
+
+    input = "bip39([legal, winner], \"foo(bar\"),xxx";
+    sp = input;
+    result = Expr(sp);
+    BOOST_CHECK_EQUAL(SpanToStr(result), "bip39([legal, winner], \"foo(bar\")");
+    BOOST_CHECK_EQUAL(SpanToStr(sp), ",xxx");
+
+    input = "multi(1,bip39([legal, winner], \"p,x\"))";
+    sp = input;
+    result = Expr(sp);
+    BOOST_CHECK_EQUAL(SpanToStr(result), "multi(1,bip39([legal, winner], \"p,x\"))");
+    BOOST_CHECK_EQUAL(SpanToStr(sp), "");
+
+    // An unterminated passphrase is not a complete bip39() expression, so the
+    // ordinary grammar applies.
+    input = "bip39([legal, winner], \"p),foo";
+    sp = input;
+    result = Expr(sp);
+    BOOST_CHECK_EQUAL(SpanToStr(result), "bip39([legal, winner], \"p)");
+    BOOST_CHECK_EQUAL(SpanToStr(sp), ",foo");
+
     // Split(...): split a string on every instance of sep, return vector
     std::vector<std::span<const char>> results;
 
