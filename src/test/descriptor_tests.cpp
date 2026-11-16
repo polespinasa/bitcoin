@@ -614,6 +614,24 @@ void CheckInferDescriptor(const std::string& script_hex, const std::string& expe
 
 BOOST_FIXTURE_TEST_SUITE(descriptor_tests, BasicTestingSetup)
 
+BOOST_AUTO_TEST_CASE(descriptor_checksum_quoted_hash)
+{
+    const std::string desc{R"(wpkh(bip39([legal, winner, thank, year, wave, sausage, worth, useful, legal, winner, thank, yellow], "foo#bar")))"};
+    BOOST_CHECK_EQUAL(GetDescriptorChecksum(desc), "fxq7mnpw");
+    BOOST_CHECK_EQUAL(GetDescriptorChecksum(desc + "#fxq7mnpw"), "fxq7mnpw");
+
+    // Invalid supplied checksums must not be mistaken for checksum-less input.
+    for (const auto& suffix : {"#", "#abc", "#fxq7mnp", "#fxq7mnpww", "#fxq7mnpq", "#fxq7mnp!", "##fxq7mnpw", "#\"#\""}) {
+        BOOST_CHECK_MESSAGE(GetDescriptorChecksum(desc + suffix).empty(), suffix);
+    }
+
+    // The checksum covers the encoded text, before the passphrase is decoded.
+    const std::string escaped{R"(wpkh(bip39([legal, winner, thank, year, wave, sausage, worth, useful, legal, winner, thank, yellow], "foo\u{23}bar")))"};
+    BOOST_CHECK_EQUAL(GetDescriptorChecksum(escaped), "z7yn7yzd");
+    BOOST_CHECK_EQUAL(GetDescriptorChecksum(escaped + "#z7yn7yzd"), "z7yn7yzd");
+    BOOST_CHECK(GetDescriptorChecksum(desc + "#z7yn7yzd").empty());
+}
+
 BOOST_AUTO_TEST_CASE(descriptor_test)
 {
     // Basic single-key compressed

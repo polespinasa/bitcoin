@@ -2987,34 +2987,47 @@ std::unique_ptr<DescriptorImpl> InferScript(const CScript& script, ParseScriptCo
 /** Check a descriptor checksum, and update desc to be the checksum-less part. */
 bool CheckChecksum(std::span<const char>& sp, bool require_checksum, std::string& error, std::string* out_checksum = nullptr)
 {
-    auto check_split = Split(sp, '#');
-    if (check_split.size() > 2) {
+    auto payload = sp;
+    std::optional<std::span<const char>> provided_checksum;
+    bool in_quote{false};
+    // Only an unquoted '#' separates the payload from its checksum. Leave
+    // escape decoding and validation of quoted strings to the descriptor parser.
+    for (size_t i = 0; i < sp.size(); ++i) {
+        if (in_quote && sp[i] == '\\') {
+            ++i; // Skip the escaped character.
+        } else if (sp[i] == '"') {
+            in_quote = !in_quote;
+        } else if (!in_quote && sp[i] == '#') {
+            payload = sp.first(i);
+            provided_checksum = sp.subspan(i + 1);
+            break;
+        }
+    }
+    if (provided_checksum && std::ranges::find(*provided_checksum, '#') != provided_checksum->end()) {
         error = "Multiple '#' symbols";
         return false;
     }
-    if (check_split.size() == 1 && require_checksum){
+    if (!provided_checksum && require_checksum) {
         error = "Missing checksum";
         return false;
     }
-    if (check_split.size() == 2) {
-        if (check_split[1].size() != 8) {
-            error = strprintf("Expected 8 character checksum, not %u characters", check_split[1].size());
-            return false;
-        }
+    if (provided_checksum && provided_checksum->size() != 8) {
+        error = strprintf("Expected 8 character checksum, not %u characters", provided_checksum->size());
+        return false;
     }
-    auto checksum = DescriptorChecksum(check_split[0]);
+    auto checksum = DescriptorChecksum(payload);
     if (checksum.empty()) {
         error = "Invalid characters in payload";
         return false;
     }
-    if (check_split.size() == 2) {
-        if (!std::equal(checksum.begin(), checksum.end(), check_split[1].begin())) {
-            error = strprintf("Provided checksum '%s' does not match computed checksum '%s'", std::string(check_split[1].begin(), check_split[1].end()), checksum);
+    if (provided_checksum) {
+        if (!std::equal(checksum.begin(), checksum.end(), provided_checksum->begin())) {
+            error = strprintf("Provided checksum '%s' does not match computed checksum '%s'", std::string(provided_checksum->begin(), provided_checksum->end()), checksum);
             return false;
         }
     }
     if (out_checksum) *out_checksum = std::move(checksum);
-    sp = check_split[0];
+    sp = payload;
     return true;
 }
 
